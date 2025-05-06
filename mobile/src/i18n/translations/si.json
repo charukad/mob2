@@ -1,0 +1,62 @@
+{
+    "common": {
+      "appName": "ශ්‍රී ලංකා සංචාරක මාර්ගෝපදේශය",
+      "loading": "පූරණය වෙමින්...",
+      "error": "දෝෂයක් සිදු විය",
+      "retry": "නැවත උත්සාහ කරන්න",
+      "cancel": "අවලංගු කරන්න",
+      "save": "සුරකින්න",
+      "done": "අවසන්",
+      "edit": "සංස්කරණය කරන්න",
+      "delete": "මකන්න",
+      "confirm": "තහවුරු කරන්න",
+      "back": "ආපසු",
+      "next": "ඊළඟ"
+    },
+    "auth": {
+      "login": "ඇතුල් වන්න",
+      "register": "ලියාපදිංචි වන්න",
+      "email": "විද්‍යුත් තැපෑල",
+      "password": "මුරපදය",
+      "forgotPassword": "මුරපදය අමතක වුණාද?",
+      "noAccount": "ගිණුමක් නැද්ද?",
+      "alreadyHaveAccount": "දැනටමත් ගිණුමක් තිබේද?",
+      "loginSuccess": "සාර්ථකව ඇතුළත් විය",
+      "registerSuccess": "ලියාපදිංචිය සාර්ථකයි"
+    },
+    "payment": {
+      "checkout": "ගෙවීම් පිටවීම",
+      "paymentMethod": "ගෙවීම් ක්‍රමය",
+      "savedCards": "සුරැකි කාඩ්පත්",
+      "newCard": "නව කාඩ්පත",
+      "cardNumber": "කාඩ්පත් අංකය",
+      "cardHolder": "කාඩ්පත් හිමිකරුගේ නම",
+      "expiryDate": "කල් ඉකුත්වීමේ දිනය",
+      "cvv": "CVV",
+      "saveCard": "අනාගත ගෙවීම් සඳහා මෙම කාඩ්පත සුරකින්න",
+      "pay": "ගෙවන්න",
+      "paymentSuccess": "ගෙවීම සාර්ථකයි!",
+      "paymentSuccessMessage": "ඔබගේ ගෙවීම සාර්ථකව සැකසී ඇත. ඔබගේ වෙන්කිරීම සඳහා ස්තූතියි.",
+      "transactionId": "ගනුදෙනු අංකය",
+      "viewReceipt": "ලදුපත බලන්න",
+      "receiptSent": "ලදුපතක් ඔබගේ විද්‍යුත් තැපෑලට යවා ඇත",
+      "paymentSummary": "ගෙවීම් සාරාංශය",
+      "subtotal": "උප එකතුව",
+      "taxes": "බදු",
+      "discount": "වට්ටම",
+      "total": "මුළු එකතුව"
+    },
+    "bookings": {
+      "guide": "මාර්ගෝපදේශක",
+      "vehicle": "වාහනය",
+      "service": "සේවාව",
+      "date": "දිනය",
+      "duration": "කාලසීමාව",
+      "persons": "පුද්ගලයින්",
+      "bookNow": "දැන් වෙන් කරන්න",
+      "viewBooking": "වෙන්කිරීම බලන්න",
+      "bookingDetails": "වෙන්කිරීමේ විස්තර",
+      "bookingConfirmed": "වෙන්කිරීම තහවුරු කර ඇත",
+      "paymentRequired": "ගෙවීම අවශ්‍යයි"
+    }
+  }

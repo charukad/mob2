@@ -1,0 +1,8 @@
+Environment variables:
+- PORT: 5008
+- NODE_ENV: development
+- MONGODB_URI: [DEFINED]
+Using MongoDB URI: mongodb://localhost:27017/sri-lanka-tourism
+Server running in development mode on port 5008
+API Documentation available at http://localhost:5008/api-docs
+MongoDB Connected

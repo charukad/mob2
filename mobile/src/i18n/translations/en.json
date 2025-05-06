@@ -1,0 +1,62 @@
+{
+    "common": {
+      "appName": "Sri Lanka Tourism Guide",
+      "loading": "Loading...",
+      "error": "An error occurred",
+      "retry": "Retry",
+      "cancel": "Cancel",
+      "save": "Save",
+      "done": "Done",
+      "edit": "Edit",
+      "delete": "Delete",
+      "confirm": "Confirm",
+      "back": "Back",
+      "next": "Next"
+    },
+    "auth": {
+      "login": "Login",
+      "register": "Register",
+      "email": "Email",
+      "password": "Password",
+      "forgotPassword": "Forgot Password?",
+      "noAccount": "Don't have an account?",
+      "alreadyHaveAccount": "Already have an account?",
+      "loginSuccess": "Login successful",
+      "registerSuccess": "Registration successful"
+    },
+    "payment": {
+      "checkout": "Payment Checkout",
+      "paymentMethod": "Payment Method",
+      "savedCards": "Saved Cards",
+      "newCard": "New Card",
+      "cardNumber": "Card Number",
+      "cardHolder": "Card Holder Name",
+      "expiryDate": "Expiry Date",
+      "cvv": "CVV",
+      "saveCard": "Save this card for future payments",
+      "pay": "Pay",
+      "paymentSuccess": "Payment Successful!",
+      "paymentSuccessMessage": "Your payment has been processed successfully. Thank you for your booking.",
+      "transactionId": "Transaction ID",
+      "viewReceipt": "View Receipt",
+      "receiptSent": "A receipt has been sent to your email address",
+      "paymentSummary": "Payment Summary",
+      "subtotal": "Subtotal",
+      "taxes": "Taxes",
+      "discount": "Discount",
+      "total": "Total"
+    },
+    "bookings": {
+      "guide": "Guide",
+      "vehicle": "Vehicle",
+      "service": "Service",
+      "date": "Date",
+      "duration": "Duration",
+      "persons": "Persons",
+      "bookNow": "Book Now",
+      "viewBooking": "View Booking",
+      "bookingDetails": "Booking Details",
+      "bookingConfirmed": "Booking Confirmed",
+      "paymentRequired": "Payment Required"
+    }
+  }

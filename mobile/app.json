@@ -1,0 +1,86 @@
+{
+  "expo": {
+    "name": "Sri Lanka Tourism Guide",
+    "slug": "sri-lanka-tourism-guide",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icons/app-icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "image": "./assets/images/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "assets": [
+      "./assets/fonts/Roboto-Regular.ttf",
+      "./assets/fonts/Roboto-Medium.ttf",
+      "./assets/fonts/Roboto-Bold.ttf"
+    ],
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.dasunc.srilankaguide",
+      "config": {
+        "googleMapsApiKey": "AIzaSyAHKdYSZMAX_vSdbEUGsBUl-ZTAJHCS-6s",
+        "usesNonExemptEncryption": false
+      },
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "This app needs your location to show you nearby attractions.",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "This app needs your location to show you nearby attractions.",
+        "UIBackgroundModes": ["location", "fetch"]
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icons/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "package": "com.dasunc.srilankaguide",
+      "permissions": [
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.CAMERA",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
+      ],
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyAHKdYSZMAX_vSdbEUGsBUl-ZTAJHCS-6s"
+        }
+      }
+    },
+    "web": {
+      "favicon": "./assets/icons/favicon.png"
+    },
+    "newArchEnabled": true,
+    "plugins": [
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow Sri Lanka Tourism Guide to use your location."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "The app accesses your photos to let you share them with fellow travelers."
+        }
+      ],
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow Sri Lanka Tourism Guide to access your camera."
+        }
+      ]
+    ],
+    "owner": "dasunc",
+    "extra": {
+      "eas": {
+        "projectId": "f7c2824f-db46-467d-9490-54496534e229"
+      }
+    }
+  }
+}

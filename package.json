@@ -1,0 +1,31 @@
+{
+  "name": "sri-lanka-tourism-guide",
+  "version": "1.0.0",
+  "description": "A comprehensive mobile platform for Sri Lanka tourism",
+  "main": "index.js",
+  "scripts": {
+    "start:server": "cd server && npm run dev",
+    "start:mobile": "cd mobile && npm start",
+    "install:all": "npm install && cd server && npm install && cd ../mobile && npm install",
+    "lint": "eslint ."
+  },
+  "keywords": [
+    "tourism",
+    "sri-lanka",
+    "mobile-app",
+    "travel-guide"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "eslint": "^8.55.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "prettier": "^3.1.0"
+  },
+  "dependencies": {
+    "@react-native-community/netinfo": "^11.4.1",
+    "react-native-maps": "^1.22.6",
+    "repomix": "^0.3.2"
+  }
+}
