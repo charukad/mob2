@@ -438,3 +438,62 @@ exports.getMe = async (req, res) => {
     });
   }
 };
+
+/**
+ * @desc    Verify if a token is valid
+ * @route   GET /api/auth/verify-token
+ * @access  Private
+ */
+exports.verifyToken = async (req, res) => {
+  try {
+    // If the request reaches here through the auth middleware, token is valid
+    const user = req.user;
+    
+    // Return minimal information for verification purposes
+    res.status(200).json({
+      status: 'success',
+      data: {
+        valid: true,
+        userId: user._id,
+        email: user.email,
+        role: user.role
+      }
+    });
+  } catch (error) {
+    console.error('Error verifying token:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error verifying token'
+    });
+  }
+};
+
+/**
+ * @desc    Get auth status
+ * @route   GET /api/auth/status
+ * @access  Public
+ */
+exports.getAuthStatus = async (req, res) => {
+  try {
+    // Check if auth middleware populated req.user
+    const isAuthenticated = !!req.user;
+    
+    res.status(200).json({
+      status: 'success',
+      data: {
+        isAuthenticated,
+        user: isAuthenticated ? {
+          id: req.user._id,
+          email: req.user.email,
+          role: req.user.role
+        } : null
+      }
+    });
+  } catch (error) {
+    console.error('Error checking auth status:', error);
+    res.status(500).json({
+      status: 'error',
+      message: 'Server error checking auth status'
+    });
+  }
+};

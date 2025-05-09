@@ -109,11 +109,37 @@ exports.getItineraryById = async (req, res) => {
  */
 exports.createItinerary = async (req, res) => {
   try {
+    console.log('=== ITINERARY CREATION REQUEST RECEIVED ===');
+    // Log the request body for debugging
+    const bodyKeys = Object.keys(req.body);
+    console.log('Request body keys:', bodyKeys);
+    console.log('Request body touristId:', req.body.touristId);
+    console.log('Request user:', req.user ? `ID: ${req.user._id}, Email: ${req.user.email}` : 'No user in request');
+    
+    // Check for touristId
+    if (!req.body.touristId && req.user) {
+      console.log('Adding user ID from request.user to body');
+      req.body.touristId = req.user._id;
+    }
+    
+    // Double check touristId is a valid ObjectId
+    if (req.body.touristId && !mongoose.Types.ObjectId.isValid(req.body.touristId)) {
+      console.error('Invalid touristId format:', req.body.touristId);
+      return res.status(400).json({
+        status: 'error',
+        message: 'Invalid touristId format'
+      });
+    }
+    
+    console.log('Creating itinerary with touristId:', req.body.touristId);
+    
     // Create itinerary
     const itinerary = await Itinerary.create({
       ...req.body,
-      touristId: req.user._id
+      touristId: req.body.touristId || req.user._id
     });
+    
+    console.log('Itinerary created successfully:', itinerary._id);
     
     res.status(201).json({
       status: 'success',
@@ -124,9 +150,26 @@ exports.createItinerary = async (req, res) => {
     
     if (error.name === 'ValidationError') {
       const messages = Object.values(error.errors).map(val => val.message);
+      console.error('Validation error details:', messages);
       
       return res.status(400).json(
         errorResponse('Validation error', 400, { errors: messages })
+      );
+    }
+    
+    // Check for specific MongoDB errors
+    if (error.code === 11000) { // Duplicate key error
+      console.error('Duplicate key error:', error.keyValue);
+      return res.status(400).json(
+        errorResponse('Duplicate entry error', 400, { field: Object.keys(error.keyValue)[0] })
+      );
+    }
+    
+    // Check for object ID casting errors
+    if (error.name === 'CastError') {
+      console.error('Cast error for field:', error.path, 'with value:', error.value);
+      return res.status(400).json(
+        errorResponse(`Invalid ${error.path} format`, 400)
       );
     }
     

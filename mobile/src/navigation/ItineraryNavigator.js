@@ -11,6 +11,7 @@ import EditActivityScreen from '../screens/itinerary/EditActivityScreen';
 import EditItineraryScreen from '../screens/itinerary/EditItineraryScreen';
 import ItineraryMapScreen from '../screens/itinerary/ItineraryMapScreen';
 import LocationPickerScreen from '../screens/itinerary/LocationPickerScreen';
+import LocalItineraryDetailScreen from '../screens/itinerary/LocalItineraryDetailScreen';
 
 const Stack = createStackNavigator();
 
@@ -31,6 +32,7 @@ const ItineraryNavigator = () => {
       <Stack.Screen name="EditItinerary" component={EditItineraryScreen} />
       <Stack.Screen name="ItineraryMap" component={ItineraryMapScreen} />
       <Stack.Screen name="LocationPicker" component={LocationPickerScreen} />
+      <Stack.Screen name="LocalItineraryDetail" component={LocalItineraryDetailScreen} />
     </Stack.Navigator>
   );
 };

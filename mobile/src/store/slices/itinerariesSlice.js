@@ -32,14 +32,27 @@ export const fetchItineraryById = createAsyncThunk(
 
 export const createItinerary = createAsyncThunk(
   'itineraries/createItinerary',
-  async (itineraryData, { rejectWithValue }) => {
+  async (itineraryData, { rejectWithValue, dispatch }) => {
     try {
+      console.log('Redux Thunk: Creating itinerary...');
       const response = await itineraryAPI.createItinerary(itineraryData);
+      console.log('Redux Thunk: Itinerary created successfully:', response.data);
       return response.data;
     } catch (error) {
-      return rejectWithValue(
-        error.message || 'Failed to create itinerary'
-      );
+      console.error('Redux Thunk: Create itinerary error:', error);
+      
+      // Create a detailed error object with all available information
+      const errorDetail = {
+        message: error.message || 'Failed to create itinerary',
+        type: error.type || 'unknown',
+        status: error.status || null,
+        data: error.response || null,
+        timestamp: new Date().toISOString(),
+      };
+      
+      console.error('Create itinerary error details:', errorDetail);
+      
+      return rejectWithValue(errorDetail);
     }
   }
 );

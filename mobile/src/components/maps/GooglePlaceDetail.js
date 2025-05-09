@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { View, StyleSheet, Image, ScrollView, Linking, TouchableOpacity, Platform } from 'react-native';
-import { Text, Button, Card, Divider, Chip, ActivityIndicator } from 'react-native-paper';
+import { Text, Button, Card, Divider, Chip, ActivityIndicator, Snackbar } from 'react-native-paper';
 import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Constants from 'expo-constants';
 import { colors, spacing } from '../../utils/themeUtils';
 import getEnvVars from '../../../env';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { googleMapsApiKey } = getEnvVars();
 
@@ -13,6 +14,9 @@ const GooglePlaceDetail = ({ place, onClose }) => {
   const [placeDetails, setPlaceDetails] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [addingToItinerary, setAddingToItinerary] = useState(false);
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
   
   useEffect(() => {
     fetchPlaceDetails();
@@ -26,7 +30,7 @@ const GooglePlaceDetail = ({ place, onClose }) => {
       if (!googleMapsApiKey) {
         throw new Error('Google Maps API key not found in environment variables');
       }
-
+      
       // Use direct Google Places API as the primary method
       const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.placeId}&fields=name,rating,formatted_phone_number,formatted_address,geometry,opening_hours,photos,price_level,website,reviews,types,business_status&key=${googleMapsApiKey}`;
       
@@ -46,11 +50,11 @@ const GooglePlaceDetail = ({ place, onClose }) => {
           throw new Error(`Google API error: ${response.status}`);
         }
         
-        const data = await response.json();
-        
-        if (data.status === 'OK' && data.result) {
-          setPlaceDetails(data.result);
-        } else {
+      const data = await response.json();
+      
+      if (data.status === 'OK' && data.result) {
+        setPlaceDetails(data.result);
+      } else {
           // If direct API fails, create a basic place details object from the place prop
           const basicDetails = {
             name: place.name,
@@ -118,6 +122,52 @@ const GooglePlaceDetail = ({ place, onClose }) => {
     }
   };
   
+  // Handle adding place to itinerary
+  const handleAddToItinerary = async () => {
+    try {
+      setAddingToItinerary(true);
+      
+      // Get existing saved places or initialize empty array
+      const savedPlacesJSON = await AsyncStorage.getItem('savedPlaces');
+      const savedPlaces = savedPlacesJSON ? JSON.parse(savedPlacesJSON) : [];
+      
+      // Create new place item
+      const details = placeDetails || place;
+      const newPlace = {
+        id: place.placeId,
+        name: details.name,
+        address: details.formatted_address || place.address,
+        latitude: place.latitude || details.geometry?.location?.lat,
+        longitude: place.longitude || details.geometry?.location?.lng,
+        rating: details.rating || 0,
+        types: details.types || [],
+        addedAt: new Date().toISOString(),
+        notes: `Place types: ${(details.types || []).join(', ')}`
+      };
+      
+      // Check if place is already saved
+      const alreadySaved = savedPlaces.some(p => p.id === newPlace.id);
+      
+      if (alreadySaved) {
+        setSnackbarMessage('This place is already in your itinerary');
+      } else {
+        // Add to saved places
+        savedPlaces.push(newPlace);
+        
+        // Save back to AsyncStorage
+        await AsyncStorage.setItem('savedPlaces', JSON.stringify(savedPlaces));
+        
+        setSnackbarMessage('Added to itinerary successfully!');
+      }
+    } catch (error) {
+      console.error('Error saving place:', error);
+      setSnackbarMessage(`Error: ${error.message}`);
+    } finally {
+      setAddingToItinerary(false);
+      setSnackbarVisible(true);
+    }
+  };
+  
   // Render placeholder
   if (loading) {
     return (
@@ -160,15 +210,15 @@ const GooglePlaceDetail = ({ place, onClose }) => {
             const directPhotoUrl = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${photo.photo_reference}&key=${googleMapsApiKey}`;
             
             return (
-              <Image
-                key={index}
-                source={{
+            <Image
+              key={index}
+              source={{
                   uri: directPhotoUrl,
                   headers: { 'Accept': 'image/*' },
                   cache: 'force-cache'
-                }}
-                style={styles.photo}
-              />
+              }}
+              style={styles.photo}
+            />
             );
           })}
         </ScrollView>
@@ -374,16 +424,27 @@ const GooglePlaceDetail = ({ place, onClose }) => {
         <Button
           mode="contained"
           icon="map-marker-plus"
-          onPress={() => {
-            // Here you could add the place to favorites or itinerary
-            // For now just show a message
-            alert('Added to itinerary!');
-          }}
+          onPress={handleAddToItinerary}
+          loading={addingToItinerary}
+          disabled={addingToItinerary}
           style={styles.addButton}
         >
           Add to Itinerary
         </Button>
       </View>
+      
+      {/* Snackbar for notifications */}
+      <Snackbar
+        visible={snackbarVisible}
+        onDismiss={() => setSnackbarVisible(false)}
+        duration={3000}
+        action={{
+          label: 'Dismiss',
+          onPress: () => setSnackbarVisible(false),
+        }}
+      >
+        {snackbarMessage}
+      </Snackbar>
     </ScrollView>
   );
 };

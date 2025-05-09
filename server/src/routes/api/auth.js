@@ -4,6 +4,7 @@ const { body } = require('express-validator');
 const authController = require('../../controllers/auth');
 const validationMiddleware = require('../../middleware/validation');
 const { protect } = require('../../middleware/auth');
+const { optionalAuth } = require('../../middleware/auth');
 
 /**
  * @swagger
@@ -245,5 +246,15 @@ router.post(
   ],
   authController.refreshToken
 );
+
+// Protected routes (require auth)
+router.use('/me', protect);
+router.get('/me', authController.getMe);
+
+// Token verification endpoint
+router.get('/verify-token', protect, authController.verifyToken);
+
+// Auth status endpoint (works with or without auth)
+router.get('/status', optionalAuth, authController.getAuthStatus);
 
 module.exports = router;

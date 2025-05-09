@@ -135,12 +135,12 @@ const SearchScreen = ({ route, navigation }) => {
         
         try {
           response = await fetch(`${url}?${params}`, {
-            signal: controller.signal,
-            headers: {
-              'Accept': 'application/json',
-              'Content-Type': 'application/json'
-            }
-          });
+          signal: controller.signal,
+          headers: {
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
+          }
+        });
         } catch (proxyError) {
           console.log('Proxy API failed, trying direct Google API:', proxyError);
           useDirectApi = true;
@@ -318,10 +318,19 @@ const SearchScreen = ({ route, navigation }) => {
       address: place.formatted_address,
       rating: place.rating,
       types: place.types,
+      photos: place.photos || [],
     };
     
-    // Navigate to the ExploreMap screen (direct navigation in the same stack)
-    navigation.navigate('ExploreMap', { selectedPlace });
+    // Check if we have a place selection callback from the local itinerary
+    if (route.params?.onPlaceSelected) {
+      // Call the callback with the selected place
+      route.params.onPlaceSelected(selectedPlace);
+      // Navigate back
+      navigation.goBack();
+    } else {
+      // Normal flow - navigate to the ExploreMap screen
+      navigation.navigate('ExploreMap', { selectedPlace });
+    }
   };
 
   // Render Google Place item
@@ -380,10 +389,35 @@ const SearchScreen = ({ route, navigation }) => {
   };
 
   // Render local location item
-  const renderLocationItem = ({ item }) => (
+  const renderLocationItem = ({ item }) => {
+    const handleLocalLocationSelect = () => {
+      if (route.params?.onPlaceSelected) {
+        // Convert local location to the place format needed for itinerary
+        const selectedPlace = {
+          placeId: item._id,
+          name: item.name,
+          latitude: item.coordinates.latitude,
+          longitude: item.coordinates.longitude,
+          address: `${item.address.street || ''}, ${item.address.city || ''}, ${item.address.province || ''}, Sri Lanka`,
+          rating: item.averageRating || 0,
+          types: [item.type],
+          photos: item.images || [],
+        };
+        
+        // Call the callback with the selected place
+        route.params.onPlaceSelected(selectedPlace);
+        // Navigate back
+        navigation.goBack();
+      } else {
+        // Normal flow - navigate to location detail
+        navigation.navigate('LocationDetail', { id: item._id });
+      }
+    };
+    
+    return (
     <TouchableOpacity
       style={styles.locationItem}
-      onPress={() => navigation.navigate('LocationDetail', { id: item._id })}
+        onPress={handleLocalLocationSelect}
     >
       <Image
         source={{ 
@@ -419,6 +453,7 @@ const SearchScreen = ({ route, navigation }) => {
       )}
     </TouchableOpacity>
   );
+  };
 
   // Render empty state
   const renderEmptyState = () => (

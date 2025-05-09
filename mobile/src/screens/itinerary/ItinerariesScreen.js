@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { View, FlatList, StyleSheet, Text, RefreshControl, ActivityIndicator } from 'react-native';
 import { useDispatch, useSelector } from 'react-redux';
-import { FAB, Searchbar, Chip, Portal, Dialog, Button } from 'react-native-paper';
+import { FAB, Searchbar, Chip, Portal, Dialog, Button, Divider } from 'react-native-paper';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useFocusEffect } from '@react-navigation/native';
 
@@ -9,6 +9,8 @@ import { useFocusEffect } from '@react-navigation/native';
 import ItineraryCard from '../../components/itinerary/ItineraryCard';
 import EmptyState from '../../components/common/EmptyState';
 import Header from '../../components/common/Header';
+import LocalItineraryList from '../../components/itinerary/LocalItineraryList';
+import AuthCheck from '../../components/common/AuthCheck';
 
 // Import theme and redux actions
 import { COLORS, SIZES } from '../../constants/theme';
@@ -23,6 +25,9 @@ const ItinerariesScreen = ({ navigation }) => {
   const [refreshing, setRefreshing] = useState(false);
   const [deleteDialogVisible, setDeleteDialogVisible] = useState(false);
   const [itineraryToDelete, setItineraryToDelete] = useState(null);
+  
+  // Add refresh trigger for LocalItineraryList
+  const [localRefreshTrigger, setLocalRefreshTrigger] = useState(0);
   
   // Filter itineraries based on search query and active filter
   const getFilteredItineraries = useCallback(() => {
@@ -74,9 +79,10 @@ const ItinerariesScreen = ({ navigation }) => {
     }, [dispatch])
   );
   
-  // Handle pull-to-refresh
+  // Refresh both server and local itineraries
   const onRefresh = useCallback(() => {
     setRefreshing(true);
+    setLocalRefreshTrigger(prev => prev + 1);
     dispatch(fetchItineraries()).then(() => {
       setRefreshing(false);
     });
@@ -106,6 +112,7 @@ const ItinerariesScreen = ({ navigation }) => {
   };
   
   return (
+    <AuthCheck redirectToLogin={true}>
     <SafeAreaView style={styles.container}>
       <Header title="My Itineraries" />
       
@@ -176,7 +183,7 @@ const ItinerariesScreen = ({ navigation }) => {
           ListEmptyComponent={
             <EmptyState
               icon="map-search"
-              title="No itineraries found"
+                title="No online itineraries found"
               message={
                 searchQuery || activeFilter !== 'all'
                   ? "Try adjusting your filters"
@@ -186,6 +193,15 @@ const ItinerariesScreen = ({ navigation }) => {
               onAction={() => navigation.navigate('CreateItinerary')}
             />
           }
+            ListFooterComponent={
+              <>
+                <Divider style={styles.divider} />
+                <LocalItineraryList 
+                  navigation={navigation} 
+                  onRefresh={localRefreshTrigger}
+                />
+              </>
+            }
         />
       )}
       
@@ -209,6 +225,7 @@ const ItinerariesScreen = ({ navigation }) => {
         </Dialog>
       </Portal>
     </SafeAreaView>
+    </AuthCheck>
   );
 };
 
@@ -248,6 +265,9 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     backgroundColor: COLORS.primary,
+  },
+  divider: {
+    marginVertical: 16,
   },
 });
 

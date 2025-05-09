@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   ScrollView,
@@ -7,6 +7,7 @@ import {
   Image,
   Platform,
   KeyboardAvoidingView,
+  Alert,
 } from 'react-native';
 import {
   TextInput,
@@ -17,21 +18,28 @@ import {
   Switch,
   ActivityIndicator,
   IconButton,
+  Snackbar,
 } from 'react-native-paper';
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { format } from 'date-fns';
 import { useDispatch, useSelector } from 'react-redux';
 import * as ImagePicker from 'expo-image-picker';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import axios from 'axios';
+import { API_URL, API_URL_OPTIONS } from '../../constants/api';
 
 // Import components and utilities
 import Header from '../../components/common/Header';
 import { COLORS, SIZES, FONTS } from '../../constants/theme';
 import { createItinerary } from '../../store/slices/itinerariesSlice';
+import authService from '../../services/authService';
+import AuthCheck from '../../components/common/AuthCheck';
 
 const CreateItineraryScreen = ({ navigation }) => {
   const dispatch = useDispatch();
-  const { loading } = useSelector((state) => state.itineraries);
+  const { loading, error } = useSelector((state) => state.itineraries);
+  const [serverStatus, setServerStatus] = useState(null);
 
   // Form state
   const [title, setTitle] = useState('');
@@ -49,6 +57,67 @@ const CreateItineraryScreen = ({ navigation }) => {
 
   // Form validation
   const [errors, setErrors] = useState({});
+  
+  // Snackbar state
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
+
+  // Test server connectivity on mount
+  useEffect(() => {
+    testServerConnection();
+    // Also check authentication status
+    checkUserAuth().then(userId => {
+      if (userId) {
+        console.log('User authenticated with ID:', userId);
+      } else {
+        console.warn('User authentication check failed or no user ID found');
+      }
+    });
+  }, []);
+
+  // Function to test server connectivity
+  const testServerConnection = async () => {
+    try {
+      setServerStatus('checking');
+      console.log('Testing server connectivity...');
+      console.log('API URL:', API_URL);
+      
+      // Try the main API URL first
+      try {
+        const response = await axios.get(`${API_URL}/health`, { timeout: 5000 });
+        setServerStatus('connected');
+        console.log('Server is reachable:', response.data);
+        return;
+      } catch (mainError) {
+        console.log('Main API URL failed:', mainError.message);
+        
+        // Try alternative URLs in development
+        if (__DEV__) {
+          for (const url of API_URL_OPTIONS) {
+            try {
+              console.log('Trying alternative URL:', url);
+              const altResponse = await axios.get(`${url}/health`, { timeout: 3000 });
+              setServerStatus('connected-alt');
+              console.log('Alternative server is reachable:', altResponse.data);
+              
+              // Save the working URL for future use
+              await AsyncStorage.setItem('workingApiUrl', url);
+              return;
+            } catch (altError) {
+              console.log(`Alternative URL ${url} failed:`, altError.message);
+            }
+          }
+        }
+      }
+      
+      // If we get here, all attempts failed
+      setServerStatus('disconnected');
+      console.log('All server connection attempts failed');
+    } catch (error) {
+      setServerStatus('error');
+      console.error('Error testing server connection:', error);
+    }
+  };
 
   // Handle date selection
   const handleStartDateConfirm = (date) => {
@@ -113,67 +182,311 @@ const CreateItineraryScreen = ({ navigation }) => {
   };
 
   // Handle form submission
-  const handleCreateItinerary = () => {
+  const handleCreateItinerary = async () => {
     if (!validateForm()) {
       return;
     }
 
+    try {
+      console.log('============ ITINERARY CREATION DEBUG ============');
+      
+      // Get user ID using our AuthService
+      const userId = await authService.getCurrentUserId(true);  // Force refresh from server
+      
+      if (!userId) {
+        console.log('User ID not found - aborting itinerary creation');
+        Alert.alert(
+          'Authentication Required',
+          'Please log in again to create an itinerary.',
+          [{ 
+            text: 'Go to Login', 
+            onPress: () => navigation.navigate('Login')
+          }]
+        );
+        return;
+      }
+      
+      console.log('Creating itinerary with user ID:', userId);
+      
+      // Format the itinerary data
     const itineraryData = {
+        id: Date.now().toString(), // Local ID
       title,
       description,
-      startDate,
-      endDate,
+        startDate: startDate ? startDate.toISOString() : null,
+        endDate: endDate ? endDate.toISOString() : null,
       budget: budget ? parseFloat(budget) : 0,
       currency,
       isPublic,
-    };
+        createdAt: new Date().toISOString(),
+        coverImage: coverImage || null,
+        places: [],
+        touristId: userId, // Use the verified user ID
+      };
 
-    // If cover image is selected, handle it with FormData
-    if (coverImage) {
-      const formData = new FormData();
+      console.log('Creating itinerary with data:', JSON.stringify(itineraryData));
       
-      // Create file object for cover image
-      const fileExt = coverImage.split('.').pop();
-      const fileName = `cover_image_${Date.now()}.${fileExt}`;
-      
-      formData.append('coverImage', {
-        uri: Platform.OS === 'android' ? coverImage : coverImage.replace('file://', ''),
-        name: fileName,
-        type: `image/${fileExt}`,
-      });
-      
-      // Add other form data
-      Object.keys(itineraryData).forEach(key => {
-        if (key === 'startDate' || key === 'endDate') {
-          formData.append(key, itineraryData[key].toISOString());
-        } else {
-          formData.append(key, itineraryData[key]);
+      // If server is disconnected, go straight to local storage
+      if (serverStatus === 'disconnected' || serverStatus === 'error') {
+        console.log('Server is disconnected, saving locally only...');
+        await saveLocalItinerary(itineraryData);
+        navigation.goBack();
+        return;
+      }
+
+      // Try to send directly to the server first
+      try {
+        console.log('Attempting direct server communication test...');
+        // First try a simple GET to check connectivity
+        const healthCheck = await axios.get(`${API_URL}/health`);
+        console.log('Health check response:', healthCheck.data);
+        
+        const authToken = await AsyncStorage.getItem('authToken');
+        if (!authToken) {
+          throw new Error('Authentication token is missing');
         }
-      });
+        
+        // Try a JSON approach for sending the data
+        const jsonData = {...itineraryData};
+        if (jsonData.coverImage) {
+          delete jsonData.coverImage;
+        }
+        
+        // Send as JSON 
+        const jsonResponse = await axios.post(`${API_URL}/itineraries`, jsonData, {
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`
+          },
+        });
+        
+        console.log('Itinerary created successfully on server:', jsonResponse.data);
       
-      dispatch(createItinerary(formData))
-        .unwrap()
-        .then((result) => {
-          navigation.navigate('ItineraryDetail', { itineraryId: result._id });
-        })
-        .catch((error) => {
-          console.error('Failed to create itinerary:', error);
-          // Handle specific errors from the API if needed
+        // Also save locally
+        await saveLocalItinerary(jsonResponse.data.data.itinerary);
+        
+        // Navigate back
+        navigation.goBack();
+      } catch (apiError) {
+        console.error('API error details:', JSON.stringify({
+          message: apiError.message,
+          status: apiError.response?.status,
+          data: apiError.response?.data,
+        }));
+        
+        // If the API call fails, save locally as a fallback
+        console.log('Server request failed, saving locally as fallback');
+        await saveLocalItinerary(itineraryData);
+        
+        setSnackbarVisible(true);
+        setSnackbarMessage('Created locally. Server sync failed: ' + 
+          (apiError.message || 'Unknown error'));
+        
+        // Still navigate back after local save
+        setTimeout(() => navigation.goBack(), 2000);
+      }
+    } catch (error) {
+      console.error('Create itinerary error:', error);
+      setSnackbarVisible(true);
+      setSnackbarMessage('Error creating itinerary: ' + (error.message || 'Unknown error'));
+    } finally {
+      console.log('============ END ITINERARY CREATION DEBUG ============');
+    }
+  };
+  
+  // Helper function to save itinerary locally
+  const saveLocalItinerary = async (itineraryData) => {
+    console.log('Falling back to local storage...');
+    const savedItinerariesJSON = await AsyncStorage.getItem('localItineraries');
+    const savedItineraries = savedItinerariesJSON ? JSON.parse(savedItinerariesJSON) : [];
+    
+    // Add new itinerary to the list
+    savedItineraries.push(itineraryData);
+    
+    // Save updated list back to AsyncStorage
+    await AsyncStorage.setItem('localItineraries', JSON.stringify(savedItineraries));
+    
+    // Show success message
+    setSnackbarVisible(true);
+    setSnackbarMessage('Server unavailable: Itinerary saved locally.');
+    
+    // Navigate back or to the itineraries list after a delay
+    setTimeout(() => {
+      navigation.goBack();
+    }, 3000);
+  };
+
+  // Function to run detailed server diagnostics
+  const runServerDiagnostics = async () => {
+    try {
+      setLoading(true);
+      console.log('--- SERVER DIAGNOSTICS STARTED ---');
+      
+      // Check health endpoint
+      console.log('Testing /health endpoint...');
+      try {
+        const healthResponse = await axios.get(`${API_URL}/health`, { timeout: 5000 });
+        console.log('Health endpoint response:', healthResponse.data);
+      } catch (error) {
+        console.error('Health endpoint error:', error.message);
+      }
+      
+      // Check authentication status
+      console.log('Checking authentication status...');
+      const token = await AsyncStorage.getItem('authToken');
+      if (token) {
+        console.log('Auth token found in storage');
+        try {
+          const meResponse = await axios.get(`${API_URL}/auth/me`, {
+            headers: { Authorization: `Bearer ${token}` },
+            timeout: 5000
+          });
+          console.log('Auth check successful:', meResponse.data);
+        } catch (error) {
+          console.error('Auth check failed:', error.message);
+        }
+      } else {
+        console.log('No auth token found - user may not be logged in');
+      }
+      
+      // Test itineraries list endpoint
+      console.log('Testing itineraries list endpoint...');
+      try {
+        const headers = token ? { Authorization: `Bearer ${token}` } : {};
+        const itinerariesResponse = await axios.get(`${API_URL}/itineraries`, {
+          headers,
+          timeout: 5000
         });
-    } else {
-      // No cover image, just send the JSON data
-      dispatch(createItinerary(itineraryData))
-        .unwrap()
-        .then((result) => {
-          navigation.navigate('ItineraryDetail', { itineraryId: result._id });
-        })
-        .catch((error) => {
-          console.error('Failed to create itinerary:', error);
-        });
+        console.log('Itineraries endpoint response:', itinerariesResponse.data);
+      } catch (error) {
+        console.error('Itineraries endpoint error:', error.message);
+      }
+      
+      // Get MongoDB connection info from server
+      console.log('Testing database connection status...');
+      try {
+        const dbStatusResponse = await axios.get(`${API_URL}/system/db-status`, { timeout: 5000 });
+        console.log('Database status:', dbStatusResponse.data);
+      } catch (error) {
+        console.error('Database status check failed:', error.message);
+      }
+      
+      console.log('--- SERVER DIAGNOSTICS COMPLETED ---');
+      
+      // Show diagnostic results to user
+      Alert.alert(
+        'Server Diagnostics',
+        'Diagnostics complete. Check console for detailed results.',
+        [{ text: 'OK' }]
+      );
+    } catch (error) {
+      console.error('Error running diagnostics:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+      
+  // Function to check if MongoDB is running locally
+  const checkLocalMongoDB = async () => {
+    try {
+      setLoading(true);
+      console.log('Checking if MongoDB is running locally...');
+      
+      // Try to connect to common MongoDB ports
+      const ports = [27017, 27018, 27019];
+      
+      for (const port of ports) {
+        try {
+          // We can't directly check MongoDB from the app, but we can try 
+          // a basic connection to the port using a quick timeout
+          console.log(`Checking port ${port}...`);
+          
+          const response = await fetch(`http://localhost:${port}`, { 
+            method: 'GET',
+            signal: AbortSignal.timeout(500)  // Very short timeout
+          });
+          
+          console.log(`Port ${port} responded with status: ${response.status}`);
+        } catch (error) {
+          if (error.name === 'AbortError') {
+            console.log(`Port ${port} check timed out, might be blocked`);
+          } else if (error.message.includes('Network request failed')) {
+            console.log(`Port ${port} appears to be closed or inaccessible`);
+          } else {
+            console.log(`Port ${port} check error: ${error.message}`);
+          }
+        }
+      }
+      
+      // Try direct connection to MongoDB URI via server endpoint
+      try {
+        console.log('Requesting MongoDB connection check from server...');
+        const response = await axios.get(`${API_URL}/system/check-mongodb`, { timeout: 5000 });
+        console.log('MongoDB connection check result:', response.data);
+        
+        if (response.data.connected) {
+          Alert.alert('MongoDB Status', 'MongoDB is running and connected to the server.');
+        } else {
+          Alert.alert('MongoDB Status', 'MongoDB appears to be down or not reachable by the server.');
+        }
+      } catch (error) {
+        console.error('MongoDB connection check failed:', error.message);
+        Alert.alert('MongoDB Status', 'Could not verify MongoDB status: ' + error.message);
+      }
+    } catch (error) {
+      console.error('Error checking MongoDB:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Function to check user authentication status
+  const checkUserAuth = async () => {
+    try {
+      // First check if user is authenticated with our service
+      const isAuthenticated = await authService.isAuthenticated();
+      if (!isAuthenticated) {
+        Alert.alert(
+          'Authentication Issue',
+          'You are not logged in or your session has expired. Please log in again.',
+          [{ 
+            text: 'Go to Login', 
+            onPress: () => navigation.navigate('Login')
+          }]
+        );
+        return false;
+      }
+      
+      // Get user ID with force refresh if server is connected
+      const userId = await authService.getCurrentUserId(serverStatus === 'connected');
+      if (!userId) {
+        // If still no user ID after all attempts, show error
+        Alert.alert(
+          'Missing User ID',
+          'Your user ID is missing. Please log out and log in again to fix this issue.',
+          [
+            { 
+              text: 'Go to Login', 
+              onPress: () => navigation.navigate('Login')
+            },
+            {
+              text: 'Cancel',
+              style: 'cancel'
+            }
+          ]
+        );
+        return false;
+      }
+      
+      return userId;
+    } catch (error) {
+      console.error('Error checking auth status:', error);
+      return false;
     }
   };
 
   return (
+    <AuthCheck redirectToLogin={true}>
     <KeyboardAvoidingView
       style={{ flex: 1 }}
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
@@ -328,6 +641,71 @@ const CreateItineraryScreen = ({ navigation }) => {
               "Create Itinerary"
             )}
           </Button>
+            
+            {/* Server Status Indicator */}
+            <View style={styles.serverStatusContainer}>
+              <View style={styles.serverStatusHeader}>
+                <Text style={styles.serverStatusLabel}>Server Status: </Text>
+                <View style={styles.diagnosticButtonsRow}>
+                  <TouchableOpacity onPress={runServerDiagnostics} style={styles.diagnosticButton}>
+                    <Text style={styles.diagnosticText}>Run Diagnostics</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={checkLocalMongoDB} style={styles.diagnosticButton}>
+                    <Text style={styles.diagnosticText}>Check MongoDB</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={checkUserAuth} style={styles.diagnosticButton}>
+                    <Text style={styles.diagnosticText}>Check Auth</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+              
+              {serverStatus === 'checking' && (
+                <View style={styles.statusRow}>
+                  <ActivityIndicator size="small" color={COLORS.primary} />
+                  <Text style={styles.checkingText}> Checking connection...</Text>
+                </View>
+              )}
+              {serverStatus === 'connected' && (
+                <View style={styles.statusRow}>
+                  <MaterialCommunityIcons name="check-circle" size={18} color="green" />
+                  <Text style={styles.connectedText}> Connected</Text>
+                </View>
+              )}
+              {serverStatus === 'connected-alt' && (
+                <View style={styles.statusRow}>
+                  <MaterialCommunityIcons name="check-circle-outline" size={18} color="green" />
+                  <Text style={styles.connectedAltText}> Connected (alternative server)</Text>
+                </View>
+              )}
+              {serverStatus === 'disconnected' && (
+                <View style={styles.statusRow}>
+                  <MaterialCommunityIcons name="close-circle" size={18} color={COLORS.error} />
+                  <Text style={styles.disconnectedText}> Not connected</Text>
+                  <TouchableOpacity onPress={testServerConnection} style={styles.retryButton}>
+                    <Text style={styles.retryText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+              {serverStatus === 'error' && (
+                <View style={styles.statusRow}>
+                  <MaterialCommunityIcons name="alert-circle" size={18} color="orange" />
+                  <Text style={styles.errorText}> Connection error</Text>
+                  <TouchableOpacity onPress={testServerConnection} style={styles.retryButton}>
+                    <Text style={styles.retryText}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+            
+            {/* Warning Message for Offline Mode */}
+            {(serverStatus === 'disconnected' || serverStatus === 'error') && (
+              <View style={styles.offlineWarning}>
+                <MaterialCommunityIcons name="information" size={20} color={COLORS.warning} />
+                <Text style={styles.offlineWarningText}>
+                  Server connection unavailable. Your itinerary will be saved locally.
+                </Text>
+              </View>
+            )}
         </View>
       </ScrollView>
       
@@ -347,7 +725,21 @@ const CreateItineraryScreen = ({ navigation }) => {
         onCancel={() => setEndDatePickerVisible(false)}
         minimumDate={startDate || new Date()}
       />
+        
+        {/* Snackbar for notifications */}
+        <Snackbar
+          visible={snackbarVisible}
+          onDismiss={() => setSnackbarVisible(false)}
+          duration={3000}
+          action={{
+            label: 'Dismiss',
+            onPress: () => setSnackbarVisible(false),
+          }}
+        >
+          {snackbarMessage}
+        </Snackbar>
     </KeyboardAvoidingView>
+    </AuthCheck>
   );
 };
 
@@ -478,6 +870,71 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginBottom: 24,
     backgroundColor: COLORS.primary,
+  },
+  serverStatusContainer: {
+    marginBottom: 24,
+  },
+  serverStatusHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  serverStatusLabel: {
+    ...FONTS.body4,
+    marginBottom: 8,
+  },
+  diagnosticButtonsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  diagnosticButton: {
+    marginLeft: 8,
+  },
+  diagnosticText: {
+    ...FONTS.body4,
+    color: COLORS.primary,
+  },
+  statusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  checkingText: {
+    ...FONTS.body4,
+    marginLeft: 8,
+  },
+  connectedText: {
+    ...FONTS.body4,
+    marginLeft: 8,
+  },
+  connectedAltText: {
+    ...FONTS.body4,
+    marginLeft: 8,
+  },
+  disconnectedText: {
+    ...FONTS.body4,
+    marginLeft: 8,
+  },
+  errorText: {
+    ...FONTS.body4,
+    marginLeft: 8,
+  },
+  retryButton: {
+    marginLeft: 8,
+  },
+  retryText: {
+    ...FONTS.body4,
+    color: COLORS.primary,
+  },
+  offlineWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    backgroundColor: COLORS.lightGray,
+    borderRadius: 8,
+  },
+  offlineWarningText: {
+    ...FONTS.body4,
+    marginLeft: 8,
   },
 });
 

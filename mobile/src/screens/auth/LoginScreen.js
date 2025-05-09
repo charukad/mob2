@@ -70,7 +70,17 @@ const LoginScreen = ({ navigation }) => {
       });
     } else {
       // Online, proceed normally
-      dispatch(login(values));
+      dispatch(login(values))
+        .unwrap()
+        .then(userData => {
+          // After successful login, ensure we have the userId set properly
+          if (userData && userData.user && userData.user._id) {
+            AsyncStorage.setItem('userId', userData.user._id)
+              .then(() => console.log('User ID saved to AsyncStorage after login:', userData.user._id))
+              .catch(err => console.error('Failed to save user ID after login:', err));
+          }
+        })
+        .catch(error => console.error('Login failed:', error));
     }
   };
 

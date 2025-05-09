@@ -26,10 +26,58 @@ export const getItineraryById = async (id) => {
 // Create a new itinerary
 export const createItinerary = async (itineraryData) => {
   try {
+    console.log('API Call: Creating itinerary with endpoint:', API_ENDPOINTS.ITINERARIES.CREATE);
+    
+    // For FormData, log the keys being sent
+    if (itineraryData instanceof FormData) {
+      const formDataKeys = [];
+      for (let pair of itineraryData.entries()) {
+        if (pair[0] === 'coverImage') {
+          formDataKeys.push('coverImage: [FILE]');
+        } else {
+          formDataKeys.push(`${pair[0]}: ${pair[1]}`);
+        }
+      }
+      console.log('FormData contents:', formDataKeys);
+    } else {
+      console.log('Request payload:', itineraryData);
+    }
+    
     const response = await api.post(API_ENDPOINTS.ITINERARIES.CREATE, itineraryData);
+    console.log('Itinerary created successfully. Server response:', response.data);
     return response.data;
   } catch (error) {
-    throw error.response?.data || error.message;
+    console.error('Create itinerary API error:', error);
+    
+    if (error.response) {
+      // The server responded with a status code outside the 2xx range
+      console.error('Server error response:', {
+        status: error.response.status,
+        headers: error.response.headers,
+        data: error.response.data
+      });
+      throw {
+        message: error.response.data?.message || 'Server error',
+        status: error.response.status,
+        response: error.response.data,
+        type: 'server_error'
+      };
+    } else if (error.request) {
+      // The request was made but no response was received
+      console.error('No response received:', error.request);
+      throw {
+        message: 'No response from server. Please check your internet connection.',
+        request: error.request,
+        type: 'network_error'
+      };
+    } else {
+      // Something happened in setting up the request
+      console.error('Request setup error:', error.message);
+      throw {
+        message: error.message || 'Error setting up the request',
+        type: 'request_setup_error'
+      };
+    }
   }
 };
 

@@ -323,6 +323,12 @@ const syncUserToStorage = async (user, token) => {
       await AsyncStorage.setItem('user', JSON.stringify(user));
       await AsyncStorage.setItem('authToken', token);
       
+      // Store the user ID directly for easier access
+      if (user._id) {
+        await AsyncStorage.setItem('userId', user._id);
+        console.log('[Auth] User ID saved to AsyncStorage:', user._id);
+      }
+      
       // Also store in userData format for compatibility
       const userData = { user, token };
       await AsyncStorage.setItem('userData', JSON.stringify(userData));
@@ -334,6 +340,7 @@ const syncUserToStorage = async (user, token) => {
       await AsyncStorage.removeItem('authToken');
       await AsyncStorage.removeItem('userData');
       await AsyncStorage.removeItem('refreshToken');
+      await AsyncStorage.removeItem('userId');
       
       console.log('[Auth] User data cleared from AsyncStorage');
     }

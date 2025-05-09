@@ -55,3 +55,39 @@ exports.authorize = (...roles) => {
     next();
   };
 };
+
+// Optional authentication - doesn't block requests without tokens
+exports.optionalAuth = async (req, res, next) => {
+  let token;
+
+  // Get token from header
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
+    token = req.headers.authorization.split(' ')[1];
+  }
+
+  // If no token, continue without authentication
+  if (!token) {
+    return next();
+  }
+
+  try {
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Get user from token
+    const user = await User.findById(decoded.id);
+
+    if (user) {
+      // Add user to request object
+      req.user = user;
+    }
+    
+    next();
+  } catch (error) {
+    // If token is invalid, just continue without authentication
+    next();
+  }
+};

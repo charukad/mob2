@@ -114,6 +114,45 @@ function AppContent() {
         const token = await AsyncStorage.getItem('authToken');
         console.log('Found auth token in storage:', !!token);
         
+        // Check for user ID in AsyncStorage and fix if missing
+        if (token) {
+          const userId = await AsyncStorage.getItem('userId');
+          console.log('Found user ID in storage:', userId);
+          
+          // If token exists but userId doesn't, try to fix it
+          if (!userId) {
+            console.log('User ID missing but token exists - attempting to recover user ID');
+            
+            // Try to get from user storage
+            const userString = await AsyncStorage.getItem('user');
+            if (userString) {
+              try {
+                const userData = JSON.parse(userString);
+                if (userData && userData._id) {
+                  console.log('Retrieved user ID from user storage:', userData._id);
+                  await AsyncStorage.setItem('userId', userData._id);
+                }
+              } catch (parseError) {
+                console.error('Error parsing user data:', parseError);
+              }
+            } else {
+              // Try userData format
+              const userDataString = await AsyncStorage.getItem('userData');
+              if (userDataString) {
+                try {
+                  const userData = JSON.parse(userDataString);
+                  if (userData && userData.user && userData.user._id) {
+                    console.log('Retrieved user ID from userData storage:', userData.user._id);
+                    await AsyncStorage.setItem('userId', userData.user._id);
+                  }
+                } catch (parseError) {
+                  console.error('Error parsing userData:', parseError);
+                }
+              }
+            }
+          }
+        }
+        
         // Initialize profile image cache
         await initProfileImageCache();
         
