@@ -246,6 +246,14 @@ const LocationSchema = new mongoose.Schema(
       type: Number,
       default: 0,
     },
+    createdAt: {
+      type: Date,
+      default: Date.now
+    },
+    updatedAt: {
+      type: Date,
+      default: Date.now
+    }
   },
   {
     timestamps: true,
@@ -293,5 +301,11 @@ LocationSchema.methods.getMainImage = function () {
   }
   return null;
 };
+
+// Update the timestamp before saving
+LocationSchema.pre('save', function(next) {
+  this.updatedAt = Date.now();
+  next();
+});
 
 module.exports = mongoose.model('Location', LocationSchema);

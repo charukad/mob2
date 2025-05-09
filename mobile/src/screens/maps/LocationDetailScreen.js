@@ -17,6 +17,7 @@ import ImageView from 'react-native-image-viewing';
 import { fetchLocationById, fetchNearbyLocations } from '../../store/slices/locationsSlice';
 import { colors, spacing } from '../../utils/themeUtils';
 import LocationMarker from '../../components/maps/LocationMarker';
+import getEnvVars from '../../../env';
 
 const { width } = Dimensions.get('window');
 const ASPECT_RATIO = 16 / 9;
@@ -28,12 +29,107 @@ const LocationDetailScreen = ({ route, navigation }) => {
   const { currentLocation, loading, error, nearbyLocations } = useSelector((state) => state.locations);
   const [imageViewVisible, setImageViewVisible] = useState(false);
   const [initialImageIndex, setInitialImageIndex] = useState(0);
+  const [localLoading, setLocalLoading] = useState(true);
+  const [localError, setLocalError] = useState(null);
+  const [locationData, setLocationData] = useState(null);
 
   useEffect(() => {
-    dispatch(fetchLocationById(id));
+    // Check if ID is a Google Places ID (starts with ChIJ)
+    if (id && id.startsWith('ChIJ')) {
+      // Fetch directly from our API
+      fetchGooglePlaceDetails();
+    } else {
+      // Use Redux for regular locations
+      dispatch(fetchLocationById(id));
+    }
   }, [dispatch, id]);
 
+  // Function to fetch Google Place details directly
+  const fetchGooglePlaceDetails = async (retryCount = 0) => {
+    try {
+      setLocalLoading(true);
+      setLocalError(null);
+
+      // Get API URL from environment configuration
+      const { apiUrl } = getEnvVars();
+      
+      console.log(`Fetching location details from: ${apiUrl}/locations/${id}`);
+      
+      // Add timeout to prevent hanging requests
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15-second timeout
+      
+      const response = await fetch(`${apiUrl}/locations/${id}`, {
+        signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+          'Content-Type': 'application/json'
+        }
+      });
+      
+      clearTimeout(timeoutId);
+      
+      // Check if response is ok before trying to parse JSON
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error response:', errorText);
+        throw new Error(`Server responded with ${response.status}: ${response.statusText}`);
+      }
+      
+      // Check content type to prevent JSON parsing errors
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Received non-JSON response:', text);
+        throw new Error('Server returned non-JSON response');
+      }
+      
+      // Safely parse JSON, catching any parsing errors
+      let data;
+      try {
+        data = await response.json();
+      } catch (parseError) {
+        console.error('JSON Parse error:', parseError);
+        throw new Error('Failed to parse server response. The server may have returned invalid JSON.');
+      }
+
+      if (data.status === 'success' && data.data && data.data.location) {
+        console.log('Successfully loaded location data');
+        setLocationData(data.data.location);
+      } else {
+        console.error('Invalid data format:', data);
+        throw new Error(data.message || 'Invalid location data received');
+      }
+    } catch (error) {
+      console.error('Error fetching Google Place details:', error);
+      
+      // Handle specific error types
+      let errorMessage = 'Failed to load location details';
+      
+      if (error.name === 'AbortError') {
+        errorMessage = 'Request timed out. Please try again.';
+      } else if (error.message.includes('Network request failed')) {
+        errorMessage = 'Network connection error. Please check your internet connection.';
+      }
+      
+      setLocalError(errorMessage);
+      
+      // Implement retry logic for network-related errors (up to 2 retries)
+      if (retryCount < 2 && (error.name === 'AbortError' || error.message.includes('Network request failed'))) {
+        console.log(`Retrying fetch (attempt ${retryCount + 1})...`);
+        setTimeout(() => {
+          fetchGooglePlaceDetails(retryCount + 1);
+        }, 2000); // Wait 2 seconds before retrying
+        return;
+      }
+    } finally {
+      // Only set loading to false if we're not retrying
+      setLocalLoading(false);
+    }
+  };
+
   useEffect(() => {
+    // For normal locations, set the title and fetch nearby locations
     if (currentLocation) {
       // Set screen title
       navigation.setOptions({ 
@@ -51,6 +147,16 @@ const LocationDetailScreen = ({ route, navigation }) => {
       }));
     }
   }, [currentLocation, dispatch, navigation]);
+
+  // For Google Places, set the title
+  useEffect(() => {
+    if (locationData) {
+      navigation.setOptions({
+        title: locationData.name,
+        headerBackTitle: 'Map'
+      });
+    }
+  }, [locationData, navigation]);
 
   // Handle image press to open image viewer
   const handleImagePress = (index) => {
@@ -174,7 +280,8 @@ const LocationDetailScreen = ({ route, navigation }) => {
     );
   };
 
-  if (loading) {
+  // This handles both types of loading states
+  if (loading || localLoading) {
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -183,12 +290,13 @@ const LocationDetailScreen = ({ route, navigation }) => {
     );
   }
 
-  if (error) {
+  // This handles both types of errors
+  if (error || localError) {
     return (
       <View style={styles.errorContainer}>
         <Ionicons name="alert-circle" size={64} color={colors.error} />
         <Text style={styles.errorText}>Error loading location</Text>
-        <Text style={styles.errorMessage}>{error}</Text>
+        <Text style={styles.errorMessage}>{error || localError}</Text>
         <Button mode="contained" onPress={() => navigation.goBack()}>
           Go Back
         </Button>
@@ -196,7 +304,10 @@ const LocationDetailScreen = ({ route, navigation }) => {
     );
   }
 
-  if (!currentLocation) {
+  // This handles both types of location data
+  const location = locationData || currentLocation;
+
+  if (!location) {
     return (
       <View style={styles.errorContainer}>
         <Text>Location not found</Text>
@@ -207,11 +318,20 @@ const LocationDetailScreen = ({ route, navigation }) => {
     );
   }
 
-  // Prepare image data for image viewer
-  const images = currentLocation.images.map(img => ({ uri: img.url }));
+  // Prepare image data for image viewer based on what format we have
+  let images = [];
+  if (location.images && Array.isArray(location.images)) {
+    images = location.images.map(img => ({ uri: img.url }));
+  } else if (location.photos && Array.isArray(location.photos)) {
+    images = location.photos.map(photo => ({ uri: photo.url }));
+  }
   
-  // Format opening hours
-  const formattedHours = formatOpeningHours(currentLocation.openingHours);
+  // Handle coordinates differently based on data source
+  const latitude = location.latitude || (location.location ? location.location.coordinates[1] : null);
+  const longitude = location.longitude || (location.location ? location.location.coordinates[0] : null);
+
+  // Format opening hours based on what format we have
+  const formattedHours = location.openingHours ? formatOpeningHours(location.openingHours) : 'Not available';
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
@@ -222,304 +342,162 @@ const LocationDetailScreen = ({ route, navigation }) => {
         showsHorizontalScrollIndicator={false}
         style={styles.imageGallery}
       >
-        {currentLocation.images.map((image, index) => (
-          <TouchableOpacity 
-            key={index} 
-            onPress={() => handleImagePress(index)}
-            activeOpacity={0.9}
-          >
-            <Image 
-              source={{ uri: image.url }} 
-              style={styles.image} 
-              resizeMode="cover"
-            />
-            {image.caption && (
-              <View style={styles.captionContainer}>
-                <Text style={styles.caption}>{image.caption}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
-        ))}
+        {images.length > 0 ? (
+          images.map((image, index) => (
+            <TouchableOpacity 
+              key={index} 
+              onPress={() => handleImagePress(index)}
+              activeOpacity={0.9}
+            >
+              <Image 
+                source={{ uri: image.uri }} 
+                style={styles.image} 
+                resizeMode="cover"
+              />
+              {image.caption && (
+                <View style={styles.captionContainer}>
+                  <Text style={styles.caption}>{image.caption}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          ))
+        ) : (
+          <Image 
+            source={{ uri: 'https://via.placeholder.com/400x200?text=No+Image' }} 
+            style={styles.image} 
+            resizeMode="cover"
+          />
+        )}
       </ScrollView>
 
       {/* Location Type and Rating */}
       <View style={styles.headerRow}>
         <Chip icon="tag" mode="outlined" style={styles.typeChip}>
-          {capitalizeFirstLetter(currentLocation.type)}
+          {location.type ? capitalizeFirstLetter(location.type) : 
+           location.category ? capitalizeFirstLetter(location.category) : 'Place'}
         </Chip>
         
-        {currentLocation.averageRating > 0 && (
+        {location.rating > 0 && (
           <View style={styles.ratingContainer}>
             <Ionicons name="star" size={16} color={colors.accent} />
-            <Text style={styles.rating}>
-              {currentLocation.averageRating.toFixed(1)}
-            </Text>
-            <Text style={styles.reviewCount}>
-              ({currentLocation.reviewCount} reviews)
-            </Text>
+            <Text style={styles.ratingText}>{location.rating.toFixed(1)}</Text>
           </View>
         )}
       </View>
 
-      {/* Location Name and Address */}
-      <Text style={styles.locationName}>{currentLocation.name}</Text>
-      <View style={styles.addressRow}>
-        <Ionicons name="location" size={18} color={colors.primary} />
-        <Text style={styles.address}>
-          {currentLocation.address.city}
-          {currentLocation.address.state && `, ${currentLocation.address.state}`}, Sri Lanka
-        </Text>
-      </View>
+      {/* Map */}
+      {latitude && longitude && (
+        <View style={styles.mapContainer}>
+          <MapView
+            provider={PROVIDER_GOOGLE}
+            style={styles.map}
+            region={{
+              latitude,
+              longitude,
+              latitudeDelta: 0.01,
+              longitudeDelta: 0.01,
+            }}
+          >
+            <Marker
+              coordinate={{
+                latitude,
+                longitude,
+              }}
+              title={location.name}
+            >
+              <LocationMarker type={location.type || location.category || 'other'} />
+            </Marker>
+          </MapView>
+        </View>
+      )}
+      
+      {/* Open Directions Button */}
+      <Button 
+        mode="contained" 
+        icon="directions" 
+        onPress={() => {
+          // Open Google Maps directions
+          const label = encodeURIComponent(location.name);
+          const url = Platform.select({
+            ios: `maps://app?daddr=${latitude},${longitude}&q=${label}`,
+            android: `google.navigation:q=${latitude},${longitude}`
+          });
+          
+          Linking.openURL(url).catch(err => 
+            console.error('Error opening map directions:', err)
+          );
+        }}
+        style={styles.directionsButton}
+      >
+        Get Directions
+      </Button>
 
-      {/* Action Buttons */}
-      <View style={styles.actionButtons}>
-        <Button 
-          mode="contained" 
-          icon="directions" 
-          onPress={openDirections}
-          style={styles.directionButton}
-        >
-          Directions
-        </Button>
-        <Button 
-          mode="outlined" 
-          icon="share-variant" 
-          style={styles.shareButton}
-        >
-          Share
-        </Button>
+      {/* Description */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>About</Text>
+        <Text style={styles.description}>
+          {location.description || 'No description available'}
+        </Text>
       </View>
 
       <Divider style={styles.divider} />
 
-      {/* Description */}
-      <Text style={styles.sectionTitle}>Description</Text>
-      <Text style={styles.description}>{currentLocation.description}</Text>
+      {/* Address */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Address</Text>
+        <View style={styles.infoRow}>
+          <Ionicons name="location" size={20} color={colors.primary} style={styles.infoIcon} />
+          <Text style={styles.infoText}>
+            {location.address || 'Address not available'}
+          </Text>
+        </View>
+      </View>
 
-      {/* Opening Hours */}
-      <Text style={styles.sectionTitle}>Opening Hours</Text>
-      {Array.isArray(formattedHours) ? (
-        formattedHours.map((hours, index) => (
-          <Text key={index} style={styles.hoursText}>{hours}</Text>
-        ))
-      ) : (
-        <Text style={styles.hoursText}>{formattedHours}</Text>
-      )}
-      {currentLocation.openingHours && currentLocation.openingHours.notes && (
-        <Text style={styles.notesText}>{currentLocation.openingHours.notes}</Text>
-      )}
-
-      {/* Entrance Fee */}
-      <Text style={styles.sectionTitle}>Entrance Fee</Text>
-      <Text style={styles.feeText}>
-        {formatEntranceFee(currentLocation.entranceFee)}
-      </Text>
-      {currentLocation.entranceFee && currentLocation.entranceFee.notes && (
-        <Text style={styles.notesText}>{currentLocation.entranceFee.notes}</Text>
-      )}
-
-      {/* Best Time to Visit */}
-      {currentLocation.bestTimeToVisit && (
+      {location.contact || location.website || (location.contactInfo && (location.contactInfo.phone || location.contactInfo.website)) ? (
         <>
-          <Text style={styles.sectionTitle}>Best Time to Visit</Text>
-          {currentLocation.bestTimeToVisit.months && currentLocation.bestTimeToVisit.months.length > 0 && (
-            <View style={styles.bestTimeRow}>
-              <Text style={styles.bestTimeLabel}>Months:</Text>
-              <Text style={styles.bestTimeText}>
-                {currentLocation.bestTimeToVisit.months.map(capitalizeFirstLetter).join(', ')}
-              </Text>
-            </View>
-          )}
-          {currentLocation.bestTimeToVisit.timeOfDay && currentLocation.bestTimeToVisit.timeOfDay.length > 0 && (
-            <View style={styles.bestTimeRow}>
-              <Text style={styles.bestTimeLabel}>Time of day:</Text>
-              <Text style={styles.bestTimeText}>
-                {currentLocation.bestTimeToVisit.timeOfDay.map(capitalizeFirstLetter).join(', ')}
-              </Text>
-            </View>
-          )}
-          {currentLocation.bestTimeToVisit.notes && (
-            <Text style={styles.notesText}>{currentLocation.bestTimeToVisit.notes}</Text>
-          )}
-        </>
-      )}
-
-      {/* Facilities */}
-      {currentLocation.facilities && currentLocation.facilities.length > 0 && (
-        <>
-          <Text style={styles.sectionTitle}>Facilities</Text>
-          <View style={styles.facilitiesContainer}>
-            {currentLocation.facilities.map((facility, index) => (
-              <View key={index} style={styles.facilityItem}>
-                {getFacilityIcon(facility)}
-                <Text style={styles.facilityText}>
-                  {formatFacilityName(facility)}
+          <Divider style={styles.divider} />
+          
+          {/* Contact Information */}
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Contact</Text>
+            
+            {(location.contact || (location.contactInfo && location.contactInfo.phone)) && (
+              <View style={styles.infoRow}>
+                <Ionicons name="call" size={20} color={colors.primary} style={styles.infoIcon} />
+                <Text 
+                  style={[styles.infoText, styles.linkText]}
+                  onPress={() => Linking.openURL(`tel:${location.contact || location.contactInfo.phone}`)}
+                >
+                  {location.contact || location.contactInfo.phone}
                 </Text>
               </View>
-            ))}
+            )}
+            
+            {(location.website || (location.contactInfo && location.contactInfo.website)) && (
+              <View style={styles.infoRow}>
+                <Ionicons name="globe" size={20} color={colors.primary} style={styles.infoIcon} />
+                <Text 
+                  style={[styles.infoText, styles.linkText]}
+                  onPress={() => Linking.openURL(location.website || location.contactInfo.website)}
+                  numberOfLines={1}
+                >
+                  {location.website || location.contactInfo.website}
+                </Text>
+              </View>
+            )}
           </View>
         </>
-      )}
+      ) : null}
 
-      {/* Map */}
-      <Text style={styles.sectionTitle}>Location</Text>
-      <View style={styles.mapContainer}>
-        <MapView
-          provider={PROVIDER_GOOGLE}
-          style={styles.map}
-          initialRegion={{
-            latitude: currentLocation.location.coordinates[1],
-            longitude: currentLocation.location.coordinates[0],
-            latitudeDelta: 0.01,
-            longitudeDelta: 0.01,
-          }}
-          scrollEnabled={false}
-          zoomEnabled={false}
-          pitchEnabled={false}
-          rotateEnabled={false}
-        >
-          <Marker
-            coordinate={{
-              latitude: currentLocation.location.coordinates[1],
-              longitude: currentLocation.location.coordinates[0],
-            }}
-          >
-            <LocationMarker type={currentLocation.type} size="large" />
-          </Marker>
-        </MapView>
-        <TouchableOpacity 
-          style={styles.fullMapButton}
-          onPress={() => navigation.navigate('ExploreMap', {
-            latitude: currentLocation.location.coordinates[1],
-            longitude: currentLocation.location.coordinates[0],
-          })}
-        >
-          <Text style={styles.fullMapText}>View on Full Map</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Nearby Locations */}
-      {nearbyLocations.length > 0 && (
-        <>
-          <Text style={styles.sectionTitle}>Nearby Attractions</Text>
-          <ScrollView 
-            horizontal 
-            showsHorizontalScrollIndicator={false} 
-            contentContainerStyle={styles.nearbyScrollContainer}
-          >
-            {nearbyLocations
-  .filter(location => location._id !== currentLocation._id)
-  .map(location => (
-    <TouchableOpacity 
-      key={location._id}
-      style={styles.nearbyCard}
-      onPress={() => {
-        navigation.replace('LocationDetail', { id: location._id });
-      }}
-    >
-      <Image 
-        source={{ 
-          uri: location.images && location.images.length > 0 
-            ? location.images[0].url 
-            : 'https://via.placeholder.com/100?text=No+Image'
-        }} 
-        style={styles.nearbyImage} 
+      {/* ImageViewer Component */}
+      <ImageView
+        images={images}
+        imageIndex={initialImageIndex}
+        visible={imageViewVisible}
+        onRequestClose={() => setImageViewVisible(false)}
       />
-      <View style={styles.nearbyInfo}>
-        <Text style={styles.nearbyName} numberOfLines={2}>{location.name}</Text>
-        <Text style={styles.nearbyDistance}>
-          <Ionicons name="location" size={12} color={colors.primary} />
-          {' '}{location.address.city}
-        </Text>
-      </View>
-    </TouchableOpacity>
-  ))}
-</ScrollView>
-</>
-)}
-
-{/* Contact Information */}
-{currentLocation.contactInfo && (
-  <>
-    <Text style={styles.sectionTitle}>Contact Information</Text>
-    {currentLocation.contactInfo.phone && (
-      <TouchableOpacity
-        style={styles.contactItem}
-        onPress={() => Linking.openURL(`tel:${currentLocation.contactInfo.phone}`)}
-      >
-        <Ionicons name="call" size={18} color={colors.primary} />
-        <Text style={styles.contactText}>{currentLocation.contactInfo.phone}</Text>
-      </TouchableOpacity>
-    )}
-    {currentLocation.contactInfo.email && (
-      <TouchableOpacity
-        style={styles.contactItem}
-        onPress={() => Linking.openURL(`mailto:${currentLocation.contactInfo.email}`)}
-      >
-        <Ionicons name="mail" size={18} color={colors.primary} />
-        <Text style={styles.contactText}>{currentLocation.contactInfo.email}</Text>
-      </TouchableOpacity>
-    )}
-    {currentLocation.contactInfo.website && (
-      <TouchableOpacity
-        style={styles.contactItem}
-        onPress={() => Linking.openURL(currentLocation.contactInfo.website)}
-      >
-        <Ionicons name="globe" size={18} color={colors.primary} />
-        <Text style={styles.contactText}>{currentLocation.contactInfo.website}</Text>
-      </TouchableOpacity>
-    )}
-  </>
-)}
-
-{/* Historical or Cultural Information */}
-{(currentLocation.historicalInfo || currentLocation.culturalSignificance) && (
-  <>
-    <Text style={styles.sectionTitle}>Historical & Cultural Information</Text>
-    {currentLocation.historicalInfo && (
-      <View style={styles.infoSection}>
-        <Text style={styles.infoTitle}>Historical Background</Text>
-        <Text style={styles.infoText}>{currentLocation.historicalInfo}</Text>
-      </View>
-    )}
-    {currentLocation.culturalSignificance && (
-      <View style={styles.infoSection}>
-        <Text style={styles.infoTitle}>Cultural Significance</Text>
-        <Text style={styles.infoText}>{currentLocation.culturalSignificance}</Text>
-      </View>
-    )}
-  </>
-)}
-
-{/* Activities */}
-{currentLocation.activities && currentLocation.activities.length > 0 && (
-  <>
-    <Text style={styles.sectionTitle}>Activities</Text>
-    <View style={styles.activitiesContainer}>
-      {currentLocation.activities.map((activity, index) => (
-        <Chip
-          key={index}
-          style={styles.activityChip}
-          textStyle={styles.activityChipText}
-        >
-          {capitalizeFirstLetter(activity)}
-        </Chip>
-      ))}
-    </View>
-  </>
-)}
-
-{/* Image Viewer Modal */}
-<ImageView
-  images={images}
-  imageIndex={initialImageIndex}
-  visible={imageViewVisible}
-  onRequestClose={() => setImageViewVisible(false)}
-  swipeToCloseEnabled={true}
-  doubleTapToZoomEnabled={true}
-/>
-</ScrollView>
-);
+    </ScrollView>
+  );
 };
 
 // Helper function to get facility icon
@@ -625,13 +603,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
-  rating: {
+  ratingText: {
     fontWeight: 'bold',
-    marginLeft: spacing.xs,
-  },
-  reviewCount: {
-    color: colors.textLight,
-    fontSize: 12,
     marginLeft: spacing.xs,
   },
   locationName: {
@@ -809,6 +782,25 @@ const styles = StyleSheet.create({
   },
   activityChipText: {
     color: colors.background,
+  },
+  directionsButton: {
+    flex: 1,
+    marginTop: spacing.lg,
+    marginHorizontal: spacing.lg,
+  },
+  section: {
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  infoIcon: {
+    marginRight: spacing.sm,
+  },
+  linkText: {
+    color: colors.primary,
   },
 });
 

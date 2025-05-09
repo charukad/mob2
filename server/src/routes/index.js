@@ -13,6 +13,7 @@ const postsRoutes = require('./api/posts');
 const eventsRoutes = require('./api/events');
 const messageRoutes = require('./messageRoutes');
 const googlePlacesRoutes = require('./googlePlacesRoutes');
+const locationRoutes = require('./locationRoutes');
 
 // Use routes
 router.use('/auth', authRoutes);
@@ -25,6 +26,7 @@ router.use('/posts', postsRoutes);
 router.use('/events', eventsRoutes);
 router.use('/', messageRoutes); // This will register message routes under /api/
 router.use('/google/places', googlePlacesRoutes); // Register Google Places routes
+router.use('/locations', locationRoutes); // Register Location routes
 
 // API Health check route
 router.get('/health', (req, res) => {

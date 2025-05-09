@@ -167,4 +167,65 @@ router.get('/photo', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /api/google/places/details/{placeId}:
+ *   get:
+ *     summary: Get details for a Google Place
+ *     description: Gets detailed information for a specific Google Place using its ID
+ *     parameters:
+ *       - in: path
+ *         name: placeId
+ *         description: Google Place ID
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Success
+ *       400:
+ *         description: Bad request
+ *       500:
+ *         description: Server error
+ */
+router.get('/details/:placeId', async (req, res) => {
+  try {
+    const { placeId } = req.params;
+    
+    if (!placeId) {
+      return responseWrapper(res, 400, 'Place ID is required');
+    }
+    
+    // Google Places API key from environment variables
+    const apiKey = process.env.GOOGLE_MAPS_API_KEY;
+    
+    if (!apiKey) {
+      return responseWrapper(res, 500, 'Google Maps API key not configured');
+    }
+    
+    // Build URL for Google Places Details API
+    const url = 'https://maps.googleapis.com/maps/api/place/details/json';
+    const params = {
+      place_id: placeId,
+      key: apiKey,
+      fields: 'name,formatted_address,geometry,photos,rating,types,url,website,formatted_phone_number,opening_hours'
+    };
+    
+    // Make request to Google Places Details API
+    const response = await axios.get(url, { params });
+    
+    if (response.data.status !== 'OK') {
+      return responseWrapper(res, 404, 'Place not found');
+    }
+    
+    // Return the results
+    return responseWrapper(res, 200, 'Place details found', {
+      place: response.data.result
+    });
+  } catch (error) {
+    console.error('Google Places Details API Error:', error.message);
+    return responseWrapper(res, 500, error.message);
+  }
+});
+
 module.exports = router; 

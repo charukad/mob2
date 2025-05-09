@@ -106,8 +106,12 @@ const SearchScreen = ({ route, navigation }) => {
         const sriLankaCenter = { latitude: 7.8731, longitude: 80.7718 };
         const location = userLocation || sriLankaCenter;
         
-        // Get API URL from environment
-        const { apiUrl } = getEnvVars();
+        // Get API URL and Google Maps API key from environment
+        const { apiUrl, googleMapsApiKey } = getEnvVars();
+        
+        if (!googleMapsApiKey) {
+          throw new Error('Google Maps API key not configured');
+        }
         
         // Build API URL for our server proxy
         const url = `${apiUrl}/google/places/search`;
@@ -121,25 +125,93 @@ const SearchScreen = ({ route, navigation }) => {
         
         console.log('Making request to Google Places API proxy:', `${url}?${params}`);
         
-        const response = await fetch(`${url}?${params}`);
+        // Add timeout to the fetch request to prevent hanging
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15-second timeout (increased from 10)
+        
+        // Try direct Google Places API as fallback if server proxy fails
+        let useDirectApi = false;
+        let response;
+        
+        try {
+          response = await fetch(`${url}?${params}`, {
+            signal: controller.signal,
+            headers: {
+              'Accept': 'application/json',
+              'Content-Type': 'application/json'
+            }
+          });
+        } catch (proxyError) {
+          console.log('Proxy API failed, trying direct Google API:', proxyError);
+          useDirectApi = true;
+        }
+        
+        // If proxy failed or returned error, try direct Google Places API
+        if (useDirectApi || (response && !response.ok)) {
+          const directUrl = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
+          const directParams = new URLSearchParams({
+            query: query,
+            location: `${location.latitude},${location.longitude}`,
+            radius: 50000,
+            key: googleMapsApiKey,
+            region: 'lk' // Sri Lanka region bias
+          }).toString();
+          
+          console.log('Trying direct Google Places API:', `${directUrl}?${directParams.replace(googleMapsApiKey, 'API_KEY_HIDDEN')}`);
+          
+          response = await fetch(`${directUrl}?${directParams}`, {
+            signal: controller.signal
+          });
+        }
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`API responded with status: ${response.status}`);
+        }
+        
+        const contentType = response.headers.get('content-type');
+        if (!contentType || !contentType.includes('application/json')) {
+          const text = await response.text();
+          console.error('Received non-JSON response:', text);
+          throw new Error('Received non-JSON response');
+        }
+        
         const data = await response.json();
         
-        if (data.status === 'success' && data.data.places) {
-          console.log(`Found ${data.data.places.length} places`);
-          setGooglePlacesResults(data.data.places);
-        } else {
-          console.log('Google Places API error:', data.message);
-          // Fall back to mock data for testing if needed
-          if (__DEV__) {
-            const mockResults = generateMockPlaces(query, location);
-            console.log('Using mock results instead');
-            setGooglePlacesResults(mockResults);
+        // Handle response format based on whether we used proxy or direct API
+        if (useDirectApi) {
+          // Direct Google API response format
+          if (data.status === 'OK' && data.results) {
+            console.log(`Found ${data.results.length} places from direct API`);
+            setGooglePlacesResults(data.results);
           } else {
-            setGooglePlacesResults([]);
+            console.log('Google Places API error:', data.status || 'Unknown error');
+            throw new Error(`Google API error: ${data.status || 'Unknown error'}`);
+          }
+        } else {
+          // Our server proxy response format
+          if (data.status === 'success' && data.data && data.data.places) {
+            console.log(`Found ${data.data.places.length} places from proxy`);
+            setGooglePlacesResults(data.data.places);
+          } else {
+            console.log('Google Places API error:', data.message || 'Unknown error');
+            throw new Error(data.message || 'Unknown error');
           }
         }
       } catch (error) {
         console.error('Error fetching Google Places data:', error);
+        
+        // Handle specific network errors
+        let errorMessage = 'Error fetching data';
+        if (error.name === 'AbortError') {
+          errorMessage = 'Request timed out';
+        } else if (error.message.includes('Network request failed')) {
+          errorMessage = 'Network connection error';
+        }
+        
+        console.log(errorMessage);
+        
         // Fall back to mock data on error in development
         if (__DEV__) {
           const sriLankaCenter = { latitude: 7.8731, longitude: 80.7718 };
@@ -236,25 +308,35 @@ const SearchScreen = ({ route, navigation }) => {
   
   // Handle Google Place selection
   const handlePlaceSelect = (place) => {
-    // Navigate to map view with the selected place
-    navigation.navigate('ExploreScreen', {
-      selectedPlace: {
-        name: place.name,
-        latitude: place.geometry.location.lat,
-        longitude: place.geometry.location.lng,
-        placeId: place.place_id,
-        address: place.formatted_address,
-        photos: place.photos,
-        rating: place.rating,
-        types: place.types,
-      }
-    });
+    // Create a place object with the necessary details for display on the map
+    const selectedPlace = {
+      placeId: place.place_id,
+      name: place.name,
+      latitude: place.geometry?.location?.lat || 0,
+      longitude: place.geometry?.location?.lng || 0,
+      // Add other relevant details that might be needed
+      address: place.formatted_address,
+      rating: place.rating,
+      types: place.types,
+    };
+    
+    // Navigate to the ExploreMap screen (direct navigation in the same stack)
+    navigation.navigate('ExploreMap', { selectedPlace });
   };
 
   // Render Google Place item
   const renderGooglePlaceItem = ({ item }) => {
     // Get API URL from environment
-    const { apiUrl } = getEnvVars();
+    const { apiUrl, googleMapsApiKey } = getEnvVars();
+    
+    // Prepare photo URLs - proxy and direct
+    let photoUrl = 'https://via.placeholder.com/100?text=No+Image';
+    let directPhotoUrl = null;
+    
+    if (item.photos && item.photos.length > 0) {
+      photoUrl = `${apiUrl}/google/places/photo?photoreference=${item.photos[0].photo_reference}&maxwidth=100`;
+      directPhotoUrl = `https://maps.googleapis.com/maps/api/place/photo?photoreference=${item.photos[0].photo_reference}&maxwidth=100&key=${googleMapsApiKey}`;
+    }
     
     return (
       <TouchableOpacity
@@ -263,11 +345,15 @@ const SearchScreen = ({ route, navigation }) => {
       >
         <Image
           source={{ 
-            uri: item.photos && item.photos.length > 0 
-              ? `${apiUrl}/google/places/photo?photoreference=${item.photos[0].photo_reference}&maxwidth=100`
-              : 'https://via.placeholder.com/100?text=No+Image'
+            uri: photoUrl,
+            headers: { 'Accept': 'image/*' },
+            cache: 'force-cache'
+          }}
+          onError={() => {
+            console.log('Photo proxy failed, using direct API for place photo');
           }}
           style={styles.locationImage}
+          defaultSource={{ uri: directPhotoUrl || 'https://via.placeholder.com/100?text=No+Image' }}
         />
         <View style={styles.locationInfo}>
           <Text style={styles.locationName} numberOfLines={1}>{item.name}</Text>

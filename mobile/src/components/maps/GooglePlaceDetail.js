@@ -26,16 +26,68 @@ const GooglePlaceDetail = ({ place, onClose }) => {
       if (!googleMapsApiKey) {
         throw new Error('Google Maps API key not found in environment variables');
       }
-      
+
+      // Use direct Google Places API as the primary method
       const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${place.placeId}&fields=name,rating,formatted_phone_number,formatted_address,geometry,opening_hours,photos,price_level,website,reviews,types,business_status&key=${googleMapsApiKey}`;
       
-      const response = await fetch(url);
-      const data = await response.json();
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000); // 15-second timeout
       
-      if (data.status === 'OK' && data.result) {
-        setPlaceDetails(data.result);
-      } else {
-        throw new Error(`Google Places API error: ${data.status}`);
+      console.log('Fetching place details from Google API directly');
+      
+      try {
+        const response = await fetch(url, {
+          signal: controller.signal,
+        });
+        
+        clearTimeout(timeoutId);
+        
+        if (!response.ok) {
+          throw new Error(`Google API error: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        
+        if (data.status === 'OK' && data.result) {
+          setPlaceDetails(data.result);
+        } else {
+          // If direct API fails, create a basic place details object from the place prop
+          const basicDetails = {
+            name: place.name,
+            formatted_address: place.address || 'Address not available',
+            geometry: {
+              location: {
+                lat: place.latitude,
+                lng: place.longitude
+              }
+            },
+            rating: place.rating || 0,
+            types: place.types || ['point_of_interest'],
+            photos: place.photos || []
+          };
+          
+          setPlaceDetails(basicDetails);
+          console.log('Using basic place details as fallback');
+        }
+      } catch (error) {
+        console.error('Error fetching from direct API:', error.message);
+        // Use basic details as fallback
+        const basicDetails = {
+          name: place.name,
+          formatted_address: place.address || 'Address not available',
+          geometry: {
+            location: {
+              lat: place.latitude,
+              lng: place.longitude
+            }
+          },
+          rating: place.rating || 0,
+          types: place.types || ['point_of_interest'],
+          photos: place.photos || []
+        };
+        
+        setPlaceDetails(basicDetails);
+        console.log('Using basic place details as fallback');
       }
     } catch (err) {
       console.error('Error fetching place details:', err);
@@ -104,15 +156,21 @@ const GooglePlaceDetail = ({ place, onClose }) => {
           showsHorizontalScrollIndicator={false}
           style={styles.photoScrollView}
         >
-          {photos.slice(0, 5).map((photo, index) => (
-            <Image
-              key={index}
-              source={{
-                uri: `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${photo.photo_reference}&key=${googleMapsApiKey}`
-              }}
-              style={styles.photo}
-            />
-          ))}
+          {photos.slice(0, 5).map((photo, index) => {
+            const directPhotoUrl = `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${photo.photo_reference}&key=${googleMapsApiKey}`;
+            
+            return (
+              <Image
+                key={index}
+                source={{
+                  uri: directPhotoUrl,
+                  headers: { 'Accept': 'image/*' },
+                  cache: 'force-cache'
+                }}
+                style={styles.photo}
+              />
+            );
+          })}
         </ScrollView>
       ) : (
         <View style={styles.photoPlaceholder}>

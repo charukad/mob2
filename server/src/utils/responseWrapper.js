@@ -7,6 +7,24 @@
 const errorResponse = require('./errorResponse');
 
 /**
+ * Standardizes API response format
+ * @param {Object} res Express response object
+ * @param {Number} statusCode HTTP status code
+ * @param {String} message Response message
+ * @param {Object} data Response data (optional)
+ * @returns {Object} Express response
+ */
+exports.responseWrapper = (res, statusCode, message, data = {}) => {
+  const response = {
+    status: statusCode >= 400 ? 'error' : 'success',
+    message,
+    data
+  };
+  
+  return res.status(statusCode).json(response);
+};
+
+/**
  * Wraps a controller function with standard error handling
  * @param {Function} controllerFn The controller function to wrap
  * @param {String} controllerName Name of the controller for logging
