@@ -5,6 +5,7 @@ import { createStackNavigator } from '@react-navigation/stack';
 import ExploreScreen from '../screens/maps/ExploreScreen';
 import LocationDetailScreen from '../screens/maps/LocationDetailScreen';
 import SearchScreen from '../screens/maps/SearchScreen';
+import LocationsList from '../screens/maps/LocationsList';
 
 const Stack = createStackNavigator();
 
@@ -35,6 +36,14 @@ const ExploreNavigator = () => {
         component={SearchScreen}
         options={{ 
           title: 'Search',
+        }}
+      />
+      <Stack.Screen
+        name="LocationsList"
+        component={LocationsList}
+        options={{ 
+          title: 'Locations List',
+          headerShown: false, // Hide the header as we use our own Appbar
         }}
       />
     </Stack.Navigator>

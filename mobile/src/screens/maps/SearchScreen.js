@@ -9,6 +9,7 @@ import LocationMarker from '../../components/maps/LocationMarker';
 import Constants from 'expo-constants';
 import * as Location from 'expo-location';
 import getEnvVars from '../../env';
+import MapView, { Marker, Callout, PROVIDER_GOOGLE } from 'react-native-maps';
 
 const { googleMapsApiKey } = getEnvVars();
 
@@ -19,16 +20,40 @@ const SearchScreen = ({ route, navigation }) => {
   const [selectedType, setSelectedType] = useState(null);
   const { types } = useSelector((state) => state.locations);
   
+  // Validate Google Maps API key
+  const [isGoogleKeyValid, setIsGoogleKeyValid] = useState(true);
+  
+  useEffect(() => {
+    // Check if Google Maps API key is valid (not empty and properly formatted)
+    const isValid = googleMapsApiKey && 
+                    !googleMapsApiKey.includes('YOUR_GOOGLE_MAPS_API_KEY') && 
+                    googleMapsApiKey.length >= 10;
+                    
+    if (!isValid) {
+      console.error('Invalid Google Maps API key:', googleMapsApiKey);
+      setIsGoogleKeyValid(false);
+    } else {
+      console.log('Google Maps API key appears valid:', googleMapsApiKey.substring(0, 5) + '...');
+      setIsGoogleKeyValid(true);
+    }
+  }, [googleMapsApiKey]);
+  
   // Google Places search state
   const [googlePlacesResults, setGooglePlacesResults] = useState([]);
-  const [isGoogleSearchActive, setIsGoogleSearchActive] = useState(false);
   const [googleSearchLoading, setGoogleSearchLoading] = useState(false);
   const [userLocation, setUserLocation] = useState(null);
-  const [searchMode, setSearchMode] = useState('local'); // 'local' or 'google'
+  const [showMapForGooglePlaces, setShowMapForGooglePlaces] = useState(false);
   const googleSearchTimeoutRef = useRef(null);
+  const mapRef = useRef(null);
+  
+  // Debugging state
+  const [showDebug, setShowDebug] = useState(__DEV__); // Only show in development by default
   
   // Predefined category terms for enhanced search
   const categoryTerms = ['adventure', 'cultural', 'historical', 'beach', 'food', 'wildlife'];
+  
+  // Add a state to store shared results between tabs
+  const [sharedSearchResults, setSharedSearchResults] = useState([]);
   
   // Initialize pagination if undefined
   useEffect(() => {
@@ -58,21 +83,75 @@ const SearchScreen = ({ route, navigation }) => {
       }
     })();
   }, []);
+  
+  // Initialize map with default locations or search results
+  useEffect(() => {
+    // Center map based on search results
+    const timer = setTimeout(() => {
+      // Skip if mapRef is not initialized
+      if (!mapRef || !mapRef.current) {
+        console.log('Map reference not ready yet, skipping map centering');
+        return;
+      }
+
+      let locationsToShow = sharedSearchResults && sharedSearchResults.length > 0
+        ? sharedSearchResults
+        : [];
+      
+      // Center map on the appropriate locations
+      if (locationsToShow.length > 0) {
+        // Find the average of all coordinates to center the map
+        let totalLat = 0;
+        let totalLng = 0;
+        let validLocations = 0;
+        
+        locationsToShow.forEach(location => {
+          if (location.coordinates && 
+              typeof location.coordinates.latitude === 'number' && 
+              typeof location.coordinates.longitude === 'number') {
+            totalLat += location.coordinates.latitude;
+            totalLng += location.coordinates.longitude;
+            validLocations++;
+          }
+        });
+        
+        if (validLocations > 0 && mapRef.current) {
+          try {
+            mapRef.current.animateToRegion({
+              latitude: totalLat / validLocations,
+              longitude: totalLng / validLocations,
+              latitudeDelta: 1.0,
+              longitudeDelta: 1.0,
+            });
+            console.log('Map centered successfully on search results');
+          } catch (error) {
+            console.error('Error animating map region:', error);
+          }
+        } else if (mapRef.current) {
+          // If no valid locations, center on Sri Lanka
+          try {
+            mapRef.current.animateToRegion({
+              latitude: 7.8731, // Sri Lanka center
+              longitude: 80.7718,
+              latitudeDelta: 3.0,
+              longitudeDelta: 3.0,
+            });
+            console.log('Map centered on Sri Lanka default location');
+          } catch (error) {
+            console.error('Error animating map to default region:', error);
+          }
+        }
+      }
+    }, 1000); // Increased timeout to 1000ms to ensure the map is fully loaded
+    
+    return () => clearTimeout(timer);
+  }, [sharedSearchResults]);
 
   // Initial search from route params
   useEffect(() => {
     if (route.params?.query) {
-      // Check if the query is a category term and set search mode accordingly
-      const query = route.params.query.toLowerCase();
-      if (categoryTerms.includes(query)) {
-        // For predefined categories, use Google search for better results
-        setSearchMode('google');
-        handleGooglePlacesSearch(route.params.query);
-      } else {
-        // For other queries, use local search
-        setSearchMode('local');
-        handleSearch(route.params.query);
-      }
+      // Always use Google Places search
+      handleGooglePlacesSearch(route.params.query);
     }
     
     // Clear search results when component unmounts
@@ -82,13 +161,22 @@ const SearchScreen = ({ route, navigation }) => {
         clearTimeout(googleSearchTimeoutRef.current);
       }
     };
-  }, [dispatch, route.params]);
+  }, [route.params]);
 
   // Handle local database search
   const handleSearch = (query = searchQuery) => {
     if (query.trim()) {
+      console.log('Performing local search for:', query);
+      
       // Reset to page 1 for new searches
       dispatch(setCurrentPage(1));
+      
+      // Log the filter type if selected
+      if (selectedType) {
+        console.log('Filtering by type:', selectedType);
+      }
+      
+      // Search with current parameters
       dispatch(searchLocations({ 
         query,
         page: 1,
@@ -102,7 +190,18 @@ const SearchScreen = ({ route, navigation }) => {
   const handleGooglePlacesSearch = async (query = searchQuery) => {
     if (!query.trim()) {
       setGooglePlacesResults([]);
+      setSharedSearchResults([]); // Clear shared results
       return;
+    }
+    
+    // Validate API key again before making requests
+    if (!googleMapsApiKey || googleMapsApiKey.includes('YOUR_GOOGLE_MAPS_API_KEY') || googleMapsApiKey.length < 10) {
+      console.error('Invalid Google Maps API key for Places search');
+      // Update shared results with empty array to clear loading state
+      setGoogleSearchLoading(false);
+      setGooglePlacesResults([]);
+      setSharedSearchResults([]);
+      return; // Don't proceed with the search
     }
     
     // Clear any existing timeout
@@ -120,9 +219,10 @@ const SearchScreen = ({ route, navigation }) => {
         const location = userLocation || sriLankaCenter;
         
         // Get API URL and Google Maps API key from environment
-        const { apiUrl, googleMapsApiKey } = getEnvVars();
+        const { apiUrl, googleMapsApiKey: mapApiKey } = getEnvVars();
         
-        if (!googleMapsApiKey) {
+        // Validate API key again since we're in an async context
+        if (!mapApiKey || mapApiKey.includes('YOUR_GOOGLE_MAPS_API_KEY') || mapApiKey.length < 10) {
           throw new Error('Google Maps API key not configured');
         }
         
@@ -172,11 +272,11 @@ const SearchScreen = ({ route, navigation }) => {
             query: enhancedQuery,
             location: `${location.latitude},${location.longitude}`,
             radius: 50000,
-            key: googleMapsApiKey,
+            key: mapApiKey,
             region: 'lk' // Sri Lanka region bias
           }).toString();
           
-          console.log('Trying direct Google Places API:', `${directUrl}?${directParams.replace(googleMapsApiKey, 'API_KEY_HIDDEN')}`);
+          console.log('Trying direct Google Places API:', `${directUrl}?${directParams.replace(mapApiKey, 'API_KEY_HIDDEN')}`);
           
           response = await fetch(`${directUrl}?${directParams}`, {
             signal: controller.signal
@@ -199,10 +299,13 @@ const SearchScreen = ({ route, navigation }) => {
         const data = await response.json();
         
         // Handle response format based on whether we used proxy or direct API
+        let places = [];
+        
         if (useDirectApi) {
           // Direct Google API response format
           if (data.status === 'OK' && data.results) {
             console.log(`Found ${data.results.length} places from direct API`);
+            places = data.results;
             setGooglePlacesResults(data.results);
           } else {
             console.log('Google Places API error:', data.status || 'Unknown error');
@@ -210,14 +313,42 @@ const SearchScreen = ({ route, navigation }) => {
           }
         } else {
           // Our server proxy response format
-          if (data.status === 'success' && data.data && data.data.places) {
+        if (data.status === 'success' && data.data && data.data.places) {
             console.log(`Found ${data.data.places.length} places from proxy`);
-            setGooglePlacesResults(data.data.places);
-          } else {
-            console.log('Google Places API error:', data.message || 'Unknown error');
+            places = data.data.places;
+          setGooglePlacesResults(data.data.places);
+        } else {
+          console.log('Google Places API error:', data.message || 'Unknown error');
             throw new Error(data.message || 'Unknown error');
           }
         }
+        
+        // Convert Google Places results to a format compatible with map markers
+        const formattedPlaces = places.map(place => ({
+          _id: place.place_id || `place-${Math.random().toString(36).substr(2, 9)}`,
+          name: place.name,
+          type: place.types && place.types.length > 0 ? place.types[0].replace(/_/g, ' ') : 'place',
+          coordinates: {
+            latitude: place.geometry?.location?.lat,
+            longitude: place.geometry?.location?.lng
+          },
+          address: {
+            city: extractCity(place.formatted_address || ''),
+            province: 'Sri Lanka'
+          },
+          averageRating: place.rating || 0,
+          images: place.photos ? [{ url: `https://maps.googleapis.com/maps/api/place/photo?maxwidth=400&photoreference=${place.photos[0].photo_reference}&key=${mapApiKey}` }] : []
+        }));
+        
+        // Save the formatted places for the map view
+        setSharedSearchResults(formattedPlaces);
+        console.log(`Formatted ${formattedPlaces.length} Google Places results for map view`);
+        
+        // Once we have results, automatically show the map view
+        if (formattedPlaces.length > 0) {
+          setShowMapForGooglePlaces(true);
+          }
+        
       } catch (error) {
         console.error('Error fetching Google Places data:', error);
         
@@ -227,24 +358,27 @@ const SearchScreen = ({ route, navigation }) => {
           errorMessage = 'Request timed out';
         } else if (error.message.includes('Network request failed')) {
           errorMessage = 'Network connection error';
+        } else if (error.message.includes('Google Maps API key not configured')) {
+          errorMessage = 'Google Maps API key not configured';
         }
         
         console.log(errorMessage);
-        
-        // Fall back to mock data on error in development
-        if (__DEV__) {
-          const sriLankaCenter = { latitude: 7.8731, longitude: 80.7718 };
-          const location = userLocation || sriLankaCenter;
-          const mockResults = generateMockPlaces(query, location);
-          console.log('Using mock results due to error');
-          setGooglePlacesResults(mockResults);
-        } else {
           setGooglePlacesResults([]);
-        }
+        setSharedSearchResults([]); // Clear shared results on error
       } finally {
         setGoogleSearchLoading(false);
       }
     }, 500);
+  };
+  
+  // Helper function to extract city from formatted address
+  const extractCity = (address) => {
+    // Simple extraction logic - can be improved
+    const parts = address.split(',');
+    if (parts.length > 1) {
+      return parts[parts.length - 2].trim();
+    }
+    return 'Sri Lanka';
   };
   
   // Generate mock places for testing in development
@@ -273,24 +407,11 @@ const SearchScreen = ({ route, navigation }) => {
   // Handle search input
   const handleSearchInput = (text) => {
     setSearchQuery(text);
-    if (searchMode === 'google') {
-      handleGooglePlacesSearch(text);
-    }
+    // Always use Google Places search
+    handleGooglePlacesSearch(text);
   };
   
-  // Toggle search mode
-  const toggleSearchMode = (mode) => {
-    setSearchMode(mode);
-    if (mode === 'google' && searchQuery.trim()) {
-      handleGooglePlacesSearch();
-    } else if (mode === 'local' && searchQuery.trim()) {
-      // Reset pagination when switching to local mode
-      dispatch(setCurrentPage(1));
-      handleSearch();
-    }
-  };
-
-  // Filter by type
+  // Filter by type - updated for Google search only
   const handleTypeSelect = (type) => {
     if (selectedType === type) {
       setSelectedType(null);
@@ -299,15 +420,9 @@ const SearchScreen = ({ route, navigation }) => {
     }
     
     // If we have a search query, search with the new filter
-    if (searchQuery.trim() && searchMode === 'local') {
-      // Reset pagination to page 1 for new type filter
-      dispatch(setCurrentPage(1));
-      dispatch(searchLocations({ 
-        query: searchQuery,
-        page: 1,
-        limit: 20,
-        type: type === selectedType ? null : type
-      }));
+    if (searchQuery.trim()) {
+      // Add type filtering to Google Places search
+      handleGooglePlacesSearch(searchQuery);
     }
   };
 
@@ -355,7 +470,12 @@ const SearchScreen = ({ route, navigation }) => {
   // Render Google Place item
   const renderGooglePlaceItem = ({ item }) => {
     // Get API URL from environment
-    const { apiUrl, googleMapsApiKey } = getEnvVars();
+    const { apiUrl, googleMapsApiKey: mapApiKey } = getEnvVars();
+    
+    // Check if API key is valid before constructing photo URLs
+    const isKeyValid = mapApiKey && 
+                       !mapApiKey.includes('YOUR_GOOGLE_MAPS_API_KEY') && 
+                       mapApiKey.length >= 10;
     
     // Prepare photo URLs - proxy and direct
     let photoUrl = 'https://via.placeholder.com/100?text=No+Image';
@@ -363,7 +483,10 @@ const SearchScreen = ({ route, navigation }) => {
     
     if (item.photos && item.photos.length > 0) {
       photoUrl = `${apiUrl}/google/places/photo?photoreference=${item.photos[0].photo_reference}&maxwidth=100`;
-      directPhotoUrl = `https://maps.googleapis.com/maps/api/place/photo?photoreference=${item.photos[0].photo_reference}&maxwidth=100&key=${googleMapsApiKey}`;
+      
+      if (isKeyValid) {
+        directPhotoUrl = `https://maps.googleapis.com/maps/api/place/photo?photoreference=${item.photos[0].photo_reference}&maxwidth=100&key=${mapApiKey}`;
+      }
     }
     
     return (
@@ -484,24 +607,19 @@ const SearchScreen = ({ route, navigation }) => {
           <Text style={styles.emptySubtitle}>
             Try a different search term or filter
           </Text>
-          {searchMode === 'local' && (
-            <Button 
-              mode="contained" 
-              onPress={() => toggleSearchMode('google')}
-              style={styles.switchButton}
-            >
-              Search on Google Maps instead
-            </Button>
-          )}
           
           {/* Category suggestions */}
           <View style={styles.categorySuggestionsContainer}>
             <Text style={styles.suggestionsTitle}>Or try one of these categories:</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestionsScroll}>
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              style={styles.suggestionsScroll}
+            >
               <Chip
+                key="adventure-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('adventure');
                   handleGooglePlacesSearch('adventure');
                 }}
@@ -511,9 +629,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Adventure
               </Chip>
               <Chip
+                key="cultural-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('cultural');
                   handleGooglePlacesSearch('cultural');
                 }}
@@ -523,9 +641,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Cultural
               </Chip>
               <Chip
+                key="historical-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('historical');
                   handleGooglePlacesSearch('historical');
                 }}
@@ -535,9 +653,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Historical
               </Chip>
               <Chip
+                key="beach-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('beach');
                   handleGooglePlacesSearch('beach');
                 }}
@@ -547,9 +665,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Beach
               </Chip>
               <Chip
+                key="food-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('food');
                   handleGooglePlacesSearch('food');
                 }}
@@ -574,9 +692,9 @@ const SearchScreen = ({ route, navigation }) => {
             <Text style={styles.suggestionsTitle}>Or explore by category:</Text>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestionsScroll}>
               <Chip
+                key="adventure-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('adventure');
                   handleGooglePlacesSearch('adventure');
                 }}
@@ -586,9 +704,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Adventure
               </Chip>
               <Chip
+                key="cultural-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('cultural');
                   handleGooglePlacesSearch('cultural');
                 }}
@@ -598,9 +716,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Cultural
               </Chip>
               <Chip
+                key="historical-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('historical');
                   handleGooglePlacesSearch('historical');
                 }}
@@ -610,9 +728,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Historical
               </Chip>
               <Chip
+                key="beach-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('beach');
                   handleGooglePlacesSearch('beach');
                 }}
@@ -622,9 +740,9 @@ const SearchScreen = ({ route, navigation }) => {
                 Beach
               </Chip>
               <Chip
+                key="food-chip"
                 mode="outlined"
                 onPress={() => {
-                  setSearchMode('google');
                   setSearchQuery('food');
                   handleGooglePlacesSearch('food');
                 }}
@@ -642,7 +760,7 @@ const SearchScreen = ({ route, navigation }) => {
 
   // Render footer (loading or load more button)
   const renderFooter = () => {
-    if ((searchLoading && pagination && pagination.currentPage > 1) || googleSearchLoading) {
+    if (googleSearchLoading) {
       return (
         <View style={styles.footerLoader}>
           <ActivityIndicator size="small" color={colors.primary} />
@@ -651,19 +769,207 @@ const SearchScreen = ({ route, navigation }) => {
       );
     }
     
-    if (searchMode === 'local' && pagination && pagination.hasNext) {
-      return (
-        <Button
-          mode="text"
-          onPress={handleLoadMore}
-          style={styles.loadMoreButton}
-        >
-          Load More
-        </Button>
-      );
-    }
-    
     return null;
+  };
+
+  // Add this effect to log search results when they change
+  useEffect(() => {
+    if (searchResults) {
+      console.log(`Received ${searchResults.length} search results`);
+      if (searchResults.length > 0) {
+        // Log the first result to see its structure
+        console.log('First result example:', JSON.stringify(searchResults[0]));
+        
+        // Check for valid coordinates in results
+        const validCoordinates = searchResults.filter(location => 
+          location.coordinates && 
+          typeof location.coordinates.latitude === 'number' && 
+          typeof location.coordinates.longitude === 'number'
+        );
+        console.log(`Found ${validCoordinates.length} results with valid coordinates out of ${searchResults.length}`);
+      }
+    }
+  }, [searchResults]);
+
+  // Get color based on location type
+  const getMarkerColor = (type) => {
+    switch (type) {
+      case 'beach':
+        return '#03A9F4'; // Blue
+      case 'mountain':
+        return '#795548'; // Brown
+      case 'temple':
+        return '#9C27B0'; // Purple
+      case 'historical':
+        return '#FFC107'; // Amber
+      case 'museum':
+        return '#673AB7'; // Deep Purple
+      case 'park':
+        return '#4CAF50'; // Green
+      case 'wildlife':
+        return '#FF9800'; // Orange
+      case 'waterfall':
+        return '#00BCD4'; // Cyan
+      case 'viewpoint':
+        return '#3F51B5'; // Indigo
+      case 'hotel':
+        return '#E91E63'; // Pink
+      case 'restaurant':
+        return '#F44336'; // Red
+      case 'shopping':
+        return '#9E9E9E'; // Grey
+      case 'entertainment':
+        return '#8BC34A'; // Light Green
+      default:
+        return colors.primary;
+    }
+  };
+
+  // Generate Sri Lanka tourism locations when no search results are found
+  const getSriLankaTourismLocations = () => {
+    // Popular tourism locations in Sri Lanka with accurate coordinates
+    return [
+      {
+        _id: 'sigiriya-1',
+        name: 'Sigiriya Rock Fortress',
+        type: 'historical',
+        coordinates: {
+          latitude: 7.9570,
+          longitude: 80.7603
+        },
+        address: {
+          city: 'Sigiriya',
+          province: 'Central Province'
+        },
+        averageRating: 4.8
+      },
+      {
+        _id: 'kandy-temple-1',
+        name: 'Temple of the Tooth Relic',
+        type: 'temple',
+        coordinates: {
+          latitude: 7.2936,
+          longitude: 80.6413
+        },
+        address: {
+          city: 'Kandy',
+          province: 'Central Province'
+        },
+        averageRating: 4.7
+      },
+      {
+        _id: 'galle-fort-1',
+        name: 'Galle Fort',
+        type: 'historical',
+        coordinates: {
+          latitude: 6.0300,
+          longitude: 80.2167
+        },
+        address: {
+          city: 'Galle',
+          province: 'Southern Province'
+        },
+        averageRating: 4.6
+      },
+      {
+        _id: 'yala-1',
+        name: 'Yala National Park',
+        type: 'wildlife',
+        coordinates: {
+          latitude: 6.3728,
+          longitude: 81.5157
+        },
+        address: {
+          city: 'Yala',
+          province: 'Southern Province'
+        },
+        averageRating: 4.5
+      },
+      {
+        _id: 'pinnawala-1',
+        name: 'Pinnawala Elephant Orphanage',
+        type: 'wildlife',
+        coordinates: {
+          latitude: 7.3009,
+          longitude: 80.3850
+        },
+        address: {
+          city: 'Pinnawala',
+          province: 'Central Province'
+        },
+        averageRating: 4.3
+      },
+      {
+        _id: 'unawatuna-1',
+        name: 'Unawatuna Beach',
+        type: 'beach',
+        coordinates: {
+          latitude: 6.0174,
+          longitude: 80.2489
+        },
+        address: {
+          city: 'Unawatuna',
+          province: 'Southern Province'
+        },
+        averageRating: 4.4
+      },
+      {
+        _id: 'anuradhapura-1',
+        name: 'Anuradhapura Ancient City',
+        type: 'historical',
+        coordinates: {
+          latitude: 8.3114,
+          longitude: 80.4037
+        },
+        address: {
+          city: 'Anuradhapura',
+          province: 'North Central Province'
+        },
+        averageRating: 4.6
+      },
+      {
+        _id: 'horton-plains-1',
+        name: 'Horton Plains National Park',
+        type: 'wildlife',
+        coordinates: {
+          latitude: 6.8021,
+          longitude: 80.8052
+        },
+        address: {
+          city: 'Nuwara Eliya',
+          province: 'Central Province'
+        },
+        averageRating: 4.5
+      },
+      {
+        _id: 'ella-rock-1',
+        name: 'Ella Rock',
+        type: 'viewpoint',
+        coordinates: {
+          latitude: 6.8667,
+          longitude: 81.0466
+        },
+        address: {
+          city: 'Ella',
+          province: 'Uva Province'
+        },
+        averageRating: 4.7
+      },
+      {
+        _id: 'adams-peak-1',
+        name: 'Adam\'s Peak',
+        type: 'mountain',
+        coordinates: {
+          latitude: 6.8096,
+          longitude: 80.4994
+        },
+        address: {
+          city: 'Nuwara Eliya',
+          province: 'Central Province'
+        },
+        averageRating: 4.9
+      }
+    ];
   };
 
   return (
@@ -674,46 +980,14 @@ const SearchScreen = ({ route, navigation }) => {
           placeholder="Search locations..."
           onChangeText={handleSearchInput}
           value={searchQuery}
-          onSubmitEditing={() => searchMode === 'google' ? handleGooglePlacesSearch() : handleSearch()}
+          onSubmitEditing={() => handleGooglePlacesSearch()}
           style={styles.searchBar}
           autoFocus={!route.params?.query}
         />
       </View>
 
-      {/* Search Mode Toggle */}
-      <View style={styles.searchModeContainer}>
-        <TouchableOpacity
-          style={[
-            styles.searchModeButton,
-            searchMode === 'local' && styles.activeSearchMode
-          ]}
-          onPress={() => toggleSearchMode('local')}
-        >
-          <Text style={[
-            styles.searchModeText,
-            searchMode === 'local' && styles.activeSearchModeText
-          ]}>
-            App Database
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.searchModeButton,
-            searchMode === 'google' && styles.activeSearchMode
-          ]}
-          onPress={() => toggleSearchMode('google')}
-        >
-          <Text style={[
-            styles.searchModeText,
-            searchMode === 'google' && styles.activeSearchModeText
-          ]}>
-            Google Places
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Type Filters - Only show for local search */}
-      {searchMode === 'local' && types && types.length > 0 && (
+      {/* Type Filters - Show for Google search by default */}
+      {types && types.length > 0 && (
         <View style={styles.filtersContainer}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             {types.map((type) => (
@@ -738,33 +1012,221 @@ const SearchScreen = ({ route, navigation }) => {
         </View>
       )}
 
-      {/* Search Results */}
-      {searchMode === 'local' ? (
-        // Local database search results
-        <FlatList
-          data={searchResults}
-          renderItem={renderLocationItem}
-          keyExtractor={(item) => item._id}
-          contentContainerStyle={styles.resultsContainer}
-          ListEmptyComponent={!searchLoading && renderEmptyState()}
-          ListFooterComponent={renderFooter()}
-          onEndReached={() => pagination && pagination.hasNext && handleLoadMore()}
-          onEndReachedThreshold={0.5}
-          initialNumToRender={10}
-        />
+      {/* Search Results - Always use Google Places results */}
+      {googleSearchLoading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingText}>Searching Places...</Text>
+        </View>
       ) : (
-        // Google Places search results
         <>
-          {googleSearchLoading && !googlePlacesResults.length ? (
-            <View style={styles.loadingContainer}>
-              <ActivityIndicator size="large" color={colors.primary} />
-              <Text style={styles.loadingText}>Searching Google Places...</Text>
+          {/* Toggle between map and list view for Google Places results */}
+          <View style={styles.googlePlacesViewToggle}>
+            <TouchableOpacity
+              style={[styles.viewToggleButton, !showMapForGooglePlaces && styles.activeViewToggleButton]}
+              onPress={() => setShowMapForGooglePlaces(false)}
+            >
+              <Ionicons name="list" size={20} color={!showMapForGooglePlaces ? colors.primary : colors.text} />
+              <Text style={[styles.viewToggleText, !showMapForGooglePlaces && styles.activeViewToggleText]}>List View</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.viewToggleButton, showMapForGooglePlaces && styles.activeViewToggleButton]}
+              onPress={() => setShowMapForGooglePlaces(true)}
+            >
+              <Ionicons name="map" size={20} color={showMapForGooglePlaces ? colors.primary : colors.text} />
+              <Text style={[styles.viewToggleText, showMapForGooglePlaces && styles.activeViewToggleText]}>Map View</Text>
+            </TouchableOpacity>
+          </View>
+                
+          {showMapForGooglePlaces ? (
+            // Map view for Google Places results
+            <View style={styles.mapContainer}>
+              <MapView
+                provider={isGoogleKeyValid ? PROVIDER_GOOGLE : null}
+                style={styles.map}
+                initialRegion={{
+                  latitude: 7.8731, // Sri Lanka center
+                  longitude: 80.7718,
+                  latitudeDelta: 3.0,
+                  longitudeDelta: 3.0,
+                }}
+                ref={mapRef}
+                showsUserLocation={true}
+                showsMyLocationButton={false}
+                showsCompass={true}
+                showsScale={true}
+              >
+                {/* Display the formatted Google Places results on the map */}
+                {(sharedSearchResults && sharedSearchResults.length > 0 ? sharedSearchResults : []).map((location, index) => {
+                  // Skip locations with invalid coordinates
+                  if (!location.coordinates || 
+                      typeof location.coordinates.latitude !== 'number' || 
+                      typeof location.coordinates.longitude !== 'number') {
+                    return null;
+                  }
+                  
+                  // Create a unique key for each marker
+                  const markerKey = `google-place-${location._id || index}`;
+                  
+                  return (
+                    <Marker
+                      key={markerKey}
+                      coordinate={{
+                        latitude: location.coordinates.latitude,
+                        longitude: location.coordinates.longitude,
+                      }}
+                      title={location.name}
+                      description={location.address.city || ''}
+                      onPress={() => {
+                        // Handle marker press similar to places list item select
+                        const selectedPlace = {
+                          placeId: location._id,
+                          name: location.name,
+                          latitude: location.coordinates.latitude,
+                          longitude: location.coordinates.longitude,
+                          address: `${location.address.city}, Sri Lanka`,
+                          rating: location.averageRating || 0,
+                          types: [location.type],
+                          photos: location.images || [],
+                        };
+                        
+                        if (route.params?.onPlaceSelected) {
+                          route.params.onPlaceSelected(selectedPlace);
+                          navigation.goBack();
+                        } else {
+                          navigation.navigate('ExploreMap', { selectedPlace });
+                        }
+                      }}
+                    >
+                      {/* Use a more visible marker */}
+                      <View style={[styles.simpleMarker, { borderColor: getMarkerColor(location.type) }]}>
+                        <View style={[styles.markerDot, { backgroundColor: getMarkerColor(location.type) }]} />
+                      </View>
+                      
+                      <Callout>
+                        <View style={styles.calloutContainer}>
+                          <Text style={styles.calloutTitle}>{location.name}</Text>
+                          <Text style={styles.calloutSubtitle}>{location.type}</Text>
+                          {location.averageRating > 0 && (
+                            <View style={styles.calloutRating}>
+                              <Ionicons name="star" size={12} color={colors.accent} />
+                              <Text style={styles.calloutRatingText}>{location.averageRating.toFixed(1)}</Text>
+                            </View>
+                          )}
+                          <Text style={styles.calloutAction}>Tap for details</Text>
+                        </View>
+                      </Callout>
+                    </Marker>
+                  );
+                })}
+              </MapView>
+              
+              {/* Map Control Buttons */}
+              <View style={styles.mapControls}>
+                <TouchableOpacity 
+                  style={styles.mapControlButton}
+                  onPress={() => {
+                    if (userLocation && mapRef && mapRef.current) {
+                      try {
+                        mapRef.current.animateToRegion({
+                          latitude: userLocation.latitude,
+                          longitude: userLocation.longitude,
+                          latitudeDelta: 0.05,
+                          longitudeDelta: 0.05,
+                        });
+                      } catch (error) {
+                        console.error('Error animating to user location in Google mode:', error);
+                      }
+                    } else {
+                      console.log('Cannot navigate to user location: either location is not available or map is not ready');
+                    }
+                  }}
+                >
+                  <Ionicons name="locate" size={24} color={colors.primary} />
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.mapControlButton}
+                  onPress={() => {
+                    if (!mapRef || !mapRef.current) {
+                      console.log('Map reference not ready, cannot center map in Google mode');
+                      return;
+                    }
+                    
+                    try {
+                      // Center on Google Places search results
+                      if (sharedSearchResults && sharedSearchResults.length > 0) {
+                        let totalLat = 0;
+                        let totalLng = 0;
+                        let validLocations = 0;
+                        
+                        sharedSearchResults.forEach(location => {
+                          if (location.coordinates && 
+                              typeof location.coordinates.latitude === 'number' && 
+                              typeof location.coordinates.longitude === 'number') {
+                            totalLat += location.coordinates.latitude;
+                            totalLng += location.coordinates.longitude;
+                            validLocations++;
+                          }
+                        });
+                        
+                        if (validLocations > 0) {
+                          mapRef.current.animateToRegion({
+                            latitude: totalLat / validLocations,
+                            longitude: totalLng / validLocations,
+                            latitudeDelta: 0.5,
+                            longitudeDelta: 0.5,
+                          });
+                        } else {
+                          // If no valid locations, center on Sri Lanka
+                          mapRef.current.animateToRegion({
+                            latitude: 7.8731,
+                            longitude: 80.7718,
+                            latitudeDelta: 3.0,
+                            longitudeDelta: 3.0,
+                          });
+                        }
+                      } else {
+                        // If no results, center on Sri Lanka
+                        mapRef.current.animateToRegion({
+                          latitude: 7.8731,
+                          longitude: 80.7718,
+                          latitudeDelta: 3.0,
+                          longitudeDelta: 3.0,
+                        });
+                      }
+                    } catch (error) {
+                      console.error('Error centering map on Google results:', error);
+                    }
+                  }}
+                >
+                  <Ionicons name="map" size={24} color={colors.primary} />
+                </TouchableOpacity>
+              </View>
+              
+              {/* Footer for Google Places map */}
+              <View style={styles.mapFooter}>
+                <Text style={styles.resultsCount}>
+                  {sharedSearchResults && sharedSearchResults.length > 0 
+                    ? `${sharedSearchResults.length} places found` 
+                    : 'No places found'}
+                </Text>
+                <Button 
+                  icon="format-list-bulleted" 
+                  mode="outlined" 
+                  onPress={() => setShowMapForGooglePlaces(false)}
+                  style={styles.listViewButton}
+                >
+                  List View
+                </Button>
+              </View>
             </View>
           ) : (
+            // List view for Google Places results
             <FlatList
               data={googlePlacesResults}
               renderItem={renderGooglePlaceItem}
-              keyExtractor={(item) => item.place_id}
+              keyExtractor={(item, index) => item.place_id?.toString() || `place-${index}-${Date.now()}`}
               contentContainerStyle={styles.resultsContainer}
               ListEmptyComponent={!googleSearchLoading && renderEmptyState()}
               ListFooterComponent={renderFooter()}
@@ -794,31 +1256,6 @@ const styles = StyleSheet.create({
   searchBar: {
     elevation: 0,
     backgroundColor: colors.lightGrey,
-  },
-  searchModeContainer: {
-    flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  searchModeButton: {
-    flex: 1,
-    padding: spacing.medium,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  activeSearchMode: {
-    borderBottomColor: colors.primary,
-  },
-  searchModeText: {
-    color: colors.text,
-    fontWeight: '500',
-  },
-  activeSearchModeText: {
-    color: colors.primary,
-    fontWeight: 'bold',
   },
   filtersContainer: {
     padding: spacing.small,
@@ -971,6 +1408,173 @@ const styles = StyleSheet.create({
     margin: spacing.tiny,
     backgroundColor: colors.surface,
     borderColor: colors.primary,
+  },
+  mapContainer: {
+    flex: 1,
+  },
+  map: {
+    flex: 1,
+  },
+  calloutContainer: {
+    width: 150,
+    padding: 10,
+  },
+  calloutTitle: {
+    fontWeight: 'bold',
+    fontSize: 14,
+    marginBottom: 2,
+  },
+  calloutSubtitle: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginBottom: 2,
+    textTransform: 'capitalize',
+  },
+  calloutRating: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 2,
+  },
+  calloutRatingText: {
+    fontSize: 12,
+    marginLeft: 2,
+    color: colors.accent,
+  },
+  calloutAction: {
+    fontSize: 10,
+    color: colors.primary,
+    marginTop: 3,
+    fontStyle: 'italic',
+  },
+  mapFooter: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    padding: spacing.medium,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  resultsCount: {
+    fontWeight: 'bold',
+  },
+  listViewButton: {
+    height: 36,
+  },
+  mapControls: {
+    position: 'absolute',
+    top: spacing.medium,
+    right: spacing.medium,
+  },
+  mapControlButton: {
+    backgroundColor: colors.surface,
+    borderRadius: 30,
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
+    marginBottom: spacing.small,
+  },
+  debugPanel: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  debugScroll: {
+    padding: spacing.medium,
+  },
+  debugTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginBottom: spacing.medium,
+    color: colors.white,
+  },
+  debugText: {
+    fontSize: 14,
+    color: colors.white,
+    marginBottom: spacing.small,
+  },
+  debugError: {
+    color: colors.error,
+    marginBottom: spacing.small,
+  },
+  debugSubtitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: spacing.medium,
+    color: colors.white,
+  },
+  debugCloseButton: {
+    position: 'absolute',
+    top: spacing.medium,
+    right: spacing.medium,
+    backgroundColor: colors.error,
+    borderRadius: 20,
+    width: 40,
+    height: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  simpleMarker: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 2,
+    borderColor: '#fff',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 5,
+  },
+  markerDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.7)',
+  },
+  googlePlacesViewToggle: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.divider,
+  },
+  viewToggleButton: {
+    flex: 1,
+    padding: spacing.medium,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+  },
+  activeViewToggleButton: {
+    borderBottomColor: colors.primary,
+  },
+  viewToggleText: {
+    color: colors.text,
+    fontWeight: '500',
+  },
+  activeViewToggleText: {
+    color: colors.primary,
+    fontWeight: 'bold',
   },
 });
 
