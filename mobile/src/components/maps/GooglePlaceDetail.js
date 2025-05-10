@@ -1,12 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, Image, ScrollView, Linking, TouchableOpacity, Platform } from 'react-native';
-import { Text, Button, Card, Divider, Chip, ActivityIndicator, Snackbar } from 'react-native-paper';
-import { Ionicons, MaterialIcons, FontAwesome5 } from '@expo/vector-icons';
+import { View, StyleSheet, Image, ScrollView, Linking, TouchableOpacity, Platform, Modal, FlatList } from 'react-native';
+import { Text, Button, Card, Divider, Chip, ActivityIndicator, Snackbar, RadioButton } from 'react-native-paper';
+import { Ionicons, MaterialIcons, FontAwesome5, MaterialCommunityIcons } from '@expo/vector-icons';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Constants from 'expo-constants';
 import { colors, spacing } from '../../utils/themeUtils';
 import getEnvVars from '../../../env';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { format, isAfter } from 'date-fns';
 
 const { googleMapsApiKey } = getEnvVars();
 
@@ -17,6 +18,12 @@ const GooglePlaceDetail = ({ place, onClose }) => {
   const [addingToItinerary, setAddingToItinerary] = useState(false);
   const [snackbarVisible, setSnackbarVisible] = useState(false);
   const [snackbarMessage, setSnackbarMessage] = useState('');
+  
+  // New state for itinerary selection
+  const [itineraryModalVisible, setItineraryModalVisible] = useState(false);
+  const [userItineraries, setUserItineraries] = useState([]);
+  const [selectedItinerary, setSelectedItinerary] = useState(null);
+  const [loadingItineraries, setLoadingItineraries] = useState(false);
   
   useEffect(() => {
     fetchPlaceDetails();
@@ -122,19 +129,64 @@ const GooglePlaceDetail = ({ place, onClose }) => {
     }
   };
   
+  // Load user's itineraries
+  const loadUserItineraries = async () => {
+    try {
+      setLoadingItineraries(true);
+      
+      // First try to get itineraries from AsyncStorage
+      const localItinerariesJSON = await AsyncStorage.getItem('localItineraries');
+      let itineraries = localItinerariesJSON ? JSON.parse(localItinerariesJSON) : [];
+      
+      console.log('Found itineraries in storage:', itineraries.length);
+      
+      // Make sure we have valid itineraries with correct ID format
+      if (itineraries.length > 0) {
+        // Log the first itinerary for debugging
+        console.log('Sample itinerary:', JSON.stringify(itineraries[0]));
+      }
+      
+      // Don't filter by dates as it may be too restrictive
+      // Just show all available itineraries
+      setUserItineraries(itineraries);
+    } catch (error) {
+      console.error('Error loading itineraries:', error);
+      setSnackbarMessage('Error loading itineraries: ' + error.message);
+      setSnackbarVisible(true);
+    } finally {
+      setLoadingItineraries(false);
+    }
+  };
+  
+  // Show itinerary selection modal
+  const showItineraryModal = async () => {
+    await loadUserItineraries();
+    setItineraryModalVisible(true);
+  };
+  
   // Handle adding place to itinerary
   const handleAddToItinerary = async () => {
+    // Show itinerary selection modal
+    showItineraryModal();
+  };
+  
+  // Handle confirming itinerary selection
+  const handleConfirmItinerarySelection = async () => {
+    if (!selectedItinerary) {
+      setSnackbarMessage('Please select an itinerary');
+      setSnackbarVisible(true);
+      return;
+    }
+    
     try {
       setAddingToItinerary(true);
       
-      // Get existing saved places or initialize empty array
-      const savedPlacesJSON = await AsyncStorage.getItem('savedPlaces');
-      const savedPlaces = savedPlacesJSON ? JSON.parse(savedPlacesJSON) : [];
+      console.log('Selected itinerary:', JSON.stringify(selectedItinerary));
       
-      // Create new place item
+      // Create place object to add
       const details = placeDetails || place;
       const newPlace = {
-        id: place.placeId,
+        id: place.placeId || `place_${Date.now()}`,
         name: details.name,
         address: details.formatted_address || place.address,
         latitude: place.latitude || details.geometry?.location?.lat,
@@ -142,30 +194,155 @@ const GooglePlaceDetail = ({ place, onClose }) => {
         rating: details.rating || 0,
         types: details.types || [],
         addedAt: new Date().toISOString(),
-        notes: `Place types: ${(details.types || []).join(', ')}`
+        photo: details.photos && details.photos.length > 0 ? details.photos[0].photo_reference : null,
       };
       
-      // Check if place is already saved
-      const alreadySaved = savedPlaces.some(p => p.id === newPlace.id);
+      // Get existing itineraries
+      const localItinerariesJSON = await AsyncStorage.getItem('localItineraries');
+      const itineraries = localItinerariesJSON ? JSON.parse(localItinerariesJSON) : [];
       
-      if (alreadySaved) {
-        setSnackbarMessage('This place is already in your itinerary');
-      } else {
-        // Add to saved places
-        savedPlaces.push(newPlace);
-        
-        // Save back to AsyncStorage
-        await AsyncStorage.setItem('savedPlaces', JSON.stringify(savedPlaces));
-        
-        setSnackbarMessage('Added to itinerary successfully!');
+      console.log('Looking for itinerary with ID:', selectedItinerary.id);
+      console.log('Available itinerary IDs:', itineraries.map(i => i.id));
+      
+      // Find the selected itinerary - be more flexible with ID matching
+      let itineraryIndex = -1;
+      
+      // Try exact match first
+      itineraryIndex = itineraries.findIndex(i => i.id === selectedItinerary.id);
+      
+      // If not found, try string comparison
+      if (itineraryIndex === -1) {
+        itineraryIndex = itineraries.findIndex(i => String(i.id) === String(selectedItinerary.id));
       }
+      
+      // If still not found, try by title as a last resort
+      if (itineraryIndex === -1 && selectedItinerary.title) {
+        itineraryIndex = itineraries.findIndex(i => i.title === selectedItinerary.title);
+      }
+      
+      if (itineraryIndex === -1) {
+        throw new Error('Selected itinerary not found in storage');
+      }
+      
+      console.log('Found itinerary at index:', itineraryIndex);
+      
+      // Create places array if it doesn't exist
+      if (!itineraries[itineraryIndex].places) {
+        itineraries[itineraryIndex].places = [];
+      }
+      
+      // Check if place already exists in itinerary
+      const placeExists = itineraries[itineraryIndex].places.some(p => p.id === newPlace.id);
+      
+      if (placeExists) {
+        setSnackbarMessage(`This place is already in "${selectedItinerary.title}"`);
+        setItineraryModalVisible(false);
+        setSnackbarVisible(true);
+        return;
+      }
+      
+      // Add place to itinerary
+      itineraries[itineraryIndex].places.push(newPlace);
+      
+      // Save updated itineraries
+      await AsyncStorage.setItem('localItineraries', JSON.stringify(itineraries));
+      
+      console.log('Successfully added place to itinerary');
+      
+      // Close modal and show success message
+      setItineraryModalVisible(false);
+      setSnackbarMessage(`Added to "${selectedItinerary.title}" successfully!`);
+      setSnackbarVisible(true);
+      
+      // Reset selection
+      setSelectedItinerary(null);
     } catch (error) {
-      console.error('Error saving place:', error);
+      console.error('Error adding place to itinerary:', error);
       setSnackbarMessage(`Error: ${error.message}`);
+      setSnackbarVisible(true);
     } finally {
       setAddingToItinerary(false);
-      setSnackbarVisible(true);
     }
+  };
+  
+  // Safely format dates
+  const formatDate = (dateString) => {
+    if (!dateString) return 'Unknown';
+    try {
+      return format(new Date(dateString), 'MMM d, yyyy');
+    } catch (error) {
+      return 'Invalid date';
+    }
+  };
+  
+  // Safely calculate duration between dates
+  const calculateDuration = (startDate, endDate) => {
+    if (!startDate || !endDate) return 1;
+    try {
+      const start = new Date(startDate);
+      const end = new Date(endDate);
+      return Math.max(1, Math.ceil((end - start) / (1000 * 60 * 60 * 24) + 1));
+    } catch (error) {
+      return 1;
+    }
+  };
+  
+  // Render itinerary item
+  const renderItineraryItem = ({ item }) => {
+    // Handle possible date parsing issues
+    let startDateStr = 'No date';
+    let endDateStr = 'No date';
+    let duration = 1;
+    
+    try {
+      startDateStr = item.startDate ? formatDate(item.startDate) : 'No date'; 
+      endDateStr = item.endDate ? formatDate(item.endDate) : 'No date';
+      duration = calculateDuration(item.startDate, item.endDate);
+    } catch (error) {
+      console.error('Error formatting dates:', error);
+    }
+    
+    return (
+      <TouchableOpacity
+        style={[
+          styles.itineraryItem,
+          selectedItinerary?.id === item.id && styles.selectedItineraryItem
+        ]}
+        onPress={() => setSelectedItinerary(item)}
+      >
+        <View style={styles.radioContainer}>
+          <RadioButton
+            value={item.id}
+            status={selectedItinerary?.id === item.id ? 'checked' : 'unchecked'}
+            onPress={() => setSelectedItinerary(item)}
+            color={colors.primary}
+          />
+        </View>
+        
+        <View style={styles.itineraryInfo}>
+          <Text style={styles.itineraryTitle}>{item.title || 'Untitled Itinerary'}</Text>
+          <Text style={styles.itineraryDate}>
+            {startDateStr} - {endDateStr}
+          </Text>
+          
+          <View style={styles.itineraryStats}>
+            <View style={styles.statItem}>
+              <MaterialCommunityIcons name="calendar-range" size={16} color={colors.textSecondary} />
+              <Text style={styles.statText}>
+                {duration} {duration === 1 ? 'day' : 'days'}
+              </Text>
+            </View>
+            
+            <View style={styles.statItem}>
+              <MaterialCommunityIcons name="map-marker-path" size={16} color={colors.textSecondary} />
+              <Text style={styles.statText}>
+                {item.places ? item.places.length : 0} places
+              </Text>
+            </View>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
   };
   
   // Render placeholder
@@ -433,6 +610,136 @@ const GooglePlaceDetail = ({ place, onClose }) => {
         </Button>
       </View>
       
+      {/* Itinerary Selection Modal */}
+      <Modal
+        visible={itineraryModalVisible}
+        onRequestClose={() => setItineraryModalVisible(false)}
+        animationType="slide"
+        transparent={true}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Itinerary</Text>
+              <TouchableOpacity 
+                style={styles.closeModalButton} 
+                onPress={() => setItineraryModalVisible(false)}
+              >
+                <MaterialIcons name="close" size={24} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            
+            <Divider />
+            
+            {loadingItineraries ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={styles.loadingText}>Loading your itineraries...</Text>
+              </View>
+            ) : userItineraries.length > 0 ? (
+              <>
+                <FlatList
+                  data={userItineraries}
+                  renderItem={renderItineraryItem}
+                  keyExtractor={item => item.id?.toString() || Math.random().toString()}
+                  contentContainerStyle={styles.itineraryList}
+                  ItemSeparatorComponent={() => <Divider />}
+                />
+                <Divider />
+                <View style={styles.createNewContainer}>
+                  <Button 
+                    mode="outlined"
+                    icon="plus"
+                    onPress={() => {
+                      setItineraryModalVisible(false);
+                      // Save the place temporarily so we can add it later
+                      AsyncStorage.setItem('pendingPlace', JSON.stringify({
+                        id: place.placeId || `place_${Date.now()}`,
+                        name: placeDetails?.name || place.name,
+                        address: placeDetails?.formatted_address || place.address,
+                        latitude: place.latitude || placeDetails?.geometry?.location?.lat,
+                        longitude: place.longitude || placeDetails?.geometry?.location?.lng,
+                        rating: placeDetails?.rating || place.rating || 0,
+                        types: placeDetails?.types || place.types || [],
+                        photo: placeDetails?.photos && placeDetails.photos.length > 0 ? 
+                          placeDetails.photos[0].photo_reference : null,
+                      }));
+                      
+                      // Navigate to create itinerary screen
+                      setTimeout(() => {
+                        onClose();
+                        setSnackbarMessage('Creating new itinerary. You can add this place after creation.');
+                        setSnackbarVisible(true);
+                      }, 300);
+                    }}
+                  >
+                    Create New Itinerary
+                  </Button>
+                </View>
+              </>
+            ) : (
+              <View style={styles.emptyItineraries}>
+                <MaterialCommunityIcons name="calendar-blank" size={64} color={colors.divider} />
+                <Text style={styles.emptyTitle}>No itineraries found</Text>
+                <Text style={styles.emptySubtitle}>
+                  Create a new itinerary to add this place.
+                </Text>
+                <Button 
+                  mode="contained"
+                  icon="plus"
+                  onPress={() => {
+                    setItineraryModalVisible(false);
+                    // First save the place temporarily so we can add it later
+                    AsyncStorage.setItem('pendingPlace', JSON.stringify({
+                      id: place.placeId || `place_${Date.now()}`,
+                      name: placeDetails?.name || place.name,
+                      address: placeDetails?.formatted_address || place.address,
+                      latitude: place.latitude || placeDetails?.geometry?.location?.lat,
+                      longitude: place.longitude || placeDetails?.geometry?.location?.lng,
+                      rating: placeDetails?.rating || place.rating || 0,
+                      types: placeDetails?.types || place.types || [],
+                      photo: placeDetails?.photos && placeDetails.photos.length > 0 ? 
+                        placeDetails.photos[0].photo_reference : null,
+                    }));
+                    
+                    // Navigate to create itinerary screen
+                    setTimeout(() => {
+                      // Use the onClose callback to navigate
+                      onClose();
+                      // We can't navigate directly here, but we'll show instructions
+                      setSnackbarMessage('Creating new itinerary. You can add this place after creation.');
+                      setSnackbarVisible(true);
+                    }, 300);
+                  }}
+                  style={styles.createButton}
+                >
+                  Create New Itinerary
+                </Button>
+              </View>
+            )}
+            
+            <View style={styles.modalButtons}>
+              <Button
+                mode="outlined"
+                onPress={() => setItineraryModalVisible(false)}
+                style={styles.modalButton}
+              >
+                Cancel
+              </Button>
+              <Button
+                mode="contained"
+                onPress={handleConfirmItinerarySelection}
+                disabled={!selectedItinerary || addingToItinerary}
+                loading={addingToItinerary}
+                style={styles.modalButton}
+              >
+                Add to Itinerary
+              </Button>
+            </View>
+          </View>
+        </View>
+      </Modal>
+      
       {/* Snackbar for notifications */}
       <Snackbar
         visible={snackbarVisible}
@@ -659,6 +966,113 @@ const styles = StyleSheet.create({
   },
   addButton: {
     flex: 2,
+  },
+  // Itinerary Modal Styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalContainer: {
+    width: '90%',
+    maxHeight: '80%',
+    backgroundColor: colors.surface,
+    borderRadius: 8,
+    overflow: 'hidden',
+    elevation: 5,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3.84,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: spacing.medium,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  closeModalButton: {
+    padding: 4,
+  },
+  itineraryList: {
+    padding: spacing.small,
+  },
+  itineraryItem: {
+    flexDirection: 'row',
+    padding: spacing.medium,
+    alignItems: 'center',
+  },
+  selectedItineraryItem: {
+    backgroundColor: colors.primary + '10',
+  },
+  radioContainer: {
+    marginRight: spacing.small,
+  },
+  itineraryInfo: {
+    flex: 1,
+  },
+  itineraryTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: 4,
+  },
+  itineraryDate: {
+    fontSize: 14,
+    color: colors.textSecondary,
+    marginBottom: 4,
+  },
+  itineraryStats: {
+    flexDirection: 'row',
+  },
+  statItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginRight: spacing.medium,
+  },
+  statText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+    marginLeft: 4,
+  },
+  emptyItineraries: {
+    padding: spacing.large,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    marginTop: spacing.medium,
+  },
+  emptySubtitle: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: spacing.small,
+    color: colors.textSecondary,
+  },
+  createNewContainer: {
+    padding: spacing.medium,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+    alignItems: 'center',
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    padding: spacing.medium,
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  modalButton: {
+    marginLeft: spacing.small,
+  },
+  createButton: {
+    marginTop: spacing.medium,
   },
 });
 

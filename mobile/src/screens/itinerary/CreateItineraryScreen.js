@@ -230,6 +230,42 @@ const CreateItineraryScreen = ({ navigation }) => {
       if (serverStatus === 'disconnected' || serverStatus === 'error') {
         console.log('Server is disconnected, saving locally only...');
         await saveLocalItinerary(itineraryData);
+        
+        // Check for pending place and add it to the itinerary if exists
+        const pendingPlaceJson = await AsyncStorage.getItem('pendingPlace');
+        if (pendingPlaceJson) {
+          try {
+            const pendingPlace = JSON.parse(pendingPlaceJson);
+            
+            // Get saved itineraries
+            const savedItinerariesJSON = await AsyncStorage.getItem('localItineraries');
+            const savedItineraries = savedItinerariesJSON ? JSON.parse(savedItinerariesJSON) : [];
+            
+            // Find the newly created itinerary
+            const newItineraryIndex = savedItineraries.findIndex(i => i.id === itineraryData.id);
+            
+            if (newItineraryIndex !== -1) {
+              // Add the pending place to the itinerary
+              if (!savedItineraries[newItineraryIndex].places) {
+                savedItineraries[newItineraryIndex].places = [];
+              }
+              savedItineraries[newItineraryIndex].places.push(pendingPlace);
+              
+              // Save updated itineraries
+              await AsyncStorage.setItem('localItineraries', JSON.stringify(savedItineraries));
+              
+              // Clear the pending place
+              await AsyncStorage.removeItem('pendingPlace');
+              
+              // Show success message
+              setSnackbarVisible(true);
+              setSnackbarMessage(`Itinerary created with "${pendingPlace.name}" added!`);
+            }
+          } catch (error) {
+            console.error('Error adding pending place to new itinerary:', error);
+          }
+        }
+        
         navigation.goBack();
         return;
       }
@@ -265,6 +301,42 @@ const CreateItineraryScreen = ({ navigation }) => {
         // Also save locally
         await saveLocalItinerary(jsonResponse.data.data.itinerary);
         
+        // Check for pending place and add it to the itinerary if exists
+        const pendingPlaceJson = await AsyncStorage.getItem('pendingPlace');
+        if (pendingPlaceJson) {
+          try {
+            const pendingPlace = JSON.parse(pendingPlaceJson);
+            
+            // Get saved itineraries
+            const savedItinerariesJSON = await AsyncStorage.getItem('localItineraries');
+            const savedItineraries = savedItinerariesJSON ? JSON.parse(savedItinerariesJSON) : [];
+            
+            // Find the newly created itinerary
+            const newItineraryIndex = savedItineraries.findIndex(i => 
+              i.id === (jsonResponse.data.data.itinerary.id || itineraryData.id));
+            
+            if (newItineraryIndex !== -1) {
+              // Add the pending place to the itinerary
+              if (!savedItineraries[newItineraryIndex].places) {
+                savedItineraries[newItineraryIndex].places = [];
+              }
+              savedItineraries[newItineraryIndex].places.push(pendingPlace);
+              
+              // Save updated itineraries
+              await AsyncStorage.setItem('localItineraries', JSON.stringify(savedItineraries));
+              
+              // Clear the pending place
+              await AsyncStorage.removeItem('pendingPlace');
+              
+              // Show success message
+              setSnackbarVisible(true);
+              setSnackbarMessage(`Itinerary created with "${pendingPlace.name}" added!`);
+            }
+          } catch (error) {
+            console.error('Error adding pending place to new itinerary:', error);
+          }
+        }
+        
         // Navigate back
         navigation.goBack();
       } catch (apiError) {
@@ -277,6 +349,41 @@ const CreateItineraryScreen = ({ navigation }) => {
         // If the API call fails, save locally as a fallback
         console.log('Server request failed, saving locally as fallback');
         await saveLocalItinerary(itineraryData);
+        
+        // Check for pending place (same as above, but for local fallback)
+        const pendingPlaceJson = await AsyncStorage.getItem('pendingPlace');
+        if (pendingPlaceJson) {
+          try {
+            const pendingPlace = JSON.parse(pendingPlaceJson);
+            
+            // Get saved itineraries
+            const savedItinerariesJSON = await AsyncStorage.getItem('localItineraries');
+            const savedItineraries = savedItinerariesJSON ? JSON.parse(savedItinerariesJSON) : [];
+            
+            // Find the newly created itinerary
+            const newItineraryIndex = savedItineraries.findIndex(i => i.id === itineraryData.id);
+            
+            if (newItineraryIndex !== -1) {
+              // Add the pending place to the itinerary
+              if (!savedItineraries[newItineraryIndex].places) {
+                savedItineraries[newItineraryIndex].places = [];
+              }
+              savedItineraries[newItineraryIndex].places.push(pendingPlace);
+              
+              // Save updated itineraries
+              await AsyncStorage.setItem('localItineraries', JSON.stringify(savedItineraries));
+              
+              // Clear the pending place
+              await AsyncStorage.removeItem('pendingPlace');
+              
+              // Show success message
+              setSnackbarVisible(true);
+              setSnackbarMessage(`Itinerary created with place "${pendingPlace.name}" added!`);
+            }
+          } catch (error) {
+            console.error('Error adding pending place to new itinerary:', error);
+          }
+        }
         
         setSnackbarVisible(true);
         setSnackbarMessage('Created locally. Server sync failed: ' + 

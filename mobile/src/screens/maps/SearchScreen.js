@@ -27,6 +27,9 @@ const SearchScreen = ({ route, navigation }) => {
   const [searchMode, setSearchMode] = useState('local'); // 'local' or 'google'
   const googleSearchTimeoutRef = useRef(null);
   
+  // Predefined category terms for enhanced search
+  const categoryTerms = ['adventure', 'cultural', 'historical', 'beach', 'food', 'wildlife'];
+  
   // Initialize pagination if undefined
   useEffect(() => {
     // Ensure pagination is initialized when component mounts
@@ -59,7 +62,17 @@ const SearchScreen = ({ route, navigation }) => {
   // Initial search from route params
   useEffect(() => {
     if (route.params?.query) {
-      handleSearch(route.params.query);
+      // Check if the query is a category term and set search mode accordingly
+      const query = route.params.query.toLowerCase();
+      if (categoryTerms.includes(query)) {
+        // For predefined categories, use Google search for better results
+        setSearchMode('google');
+        handleGooglePlacesSearch(route.params.query);
+      } else {
+        // For other queries, use local search
+        setSearchMode('local');
+        handleSearch(route.params.query);
+      }
     }
     
     // Clear search results when component unmounts
@@ -116,9 +129,15 @@ const SearchScreen = ({ route, navigation }) => {
         // Build API URL for our server proxy
         const url = `${apiUrl}/google/places/search`;
         
+        // Enhance query for category terms by adding "in Sri Lanka"
+        let enhancedQuery = query;
+        if (categoryTerms.includes(query.toLowerCase())) {
+          enhancedQuery = `${query} places in Sri Lanka`;
+        }
+        
         // Add query parameters
         const params = new URLSearchParams({
-          query: query,
+          query: enhancedQuery,
           location: `${location.latitude},${location.longitude}`,
           radius: 50000 // 50km radius
         }).toString();
@@ -150,7 +169,7 @@ const SearchScreen = ({ route, navigation }) => {
         if (useDirectApi || (response && !response.ok)) {
           const directUrl = 'https://maps.googleapis.com/maps/api/place/textsearch/json';
           const directParams = new URLSearchParams({
-            query: query,
+            query: enhancedQuery,
             location: `${location.latitude},${location.longitude}`,
             radius: 50000,
             key: googleMapsApiKey,
@@ -474,6 +493,73 @@ const SearchScreen = ({ route, navigation }) => {
               Search on Google Maps instead
             </Button>
           )}
+          
+          {/* Category suggestions */}
+          <View style={styles.categorySuggestionsContainer}>
+            <Text style={styles.suggestionsTitle}>Or try one of these categories:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestionsScroll}>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('adventure');
+                  handleGooglePlacesSearch('adventure');
+                }}
+                style={styles.suggestionChip}
+                icon="hiking"
+              >
+                Adventure
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('cultural');
+                  handleGooglePlacesSearch('cultural');
+                }}
+                style={styles.suggestionChip}
+                icon="temple-buddhist"
+              >
+                Cultural
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('historical');
+                  handleGooglePlacesSearch('historical');
+                }}
+                style={styles.suggestionChip}
+                icon="book-open-page-variant"
+              >
+                Historical
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('beach');
+                  handleGooglePlacesSearch('beach');
+                }}
+                style={styles.suggestionChip}
+                icon="beach"
+              >
+                Beach
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('food');
+                  handleGooglePlacesSearch('food');
+                }}
+                style={styles.suggestionChip}
+                icon="food"
+              >
+                Food
+              </Chip>
+            </ScrollView>
+          </View>
         </>
       ) : (
         <>
@@ -482,6 +568,73 @@ const SearchScreen = ({ route, navigation }) => {
           <Text style={styles.emptySubtitle}>
             Enter a location name, type, or feature
           </Text>
+          
+          {/* Category quick search */}
+          <View style={styles.categorySuggestionsContainer}>
+            <Text style={styles.suggestionsTitle}>Or explore by category:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.suggestionsScroll}>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('adventure');
+                  handleGooglePlacesSearch('adventure');
+                }}
+                style={styles.suggestionChip}
+                icon="hiking"
+              >
+                Adventure
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('cultural');
+                  handleGooglePlacesSearch('cultural');
+                }}
+                style={styles.suggestionChip}
+                icon="temple-buddhist"
+              >
+                Cultural
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('historical');
+                  handleGooglePlacesSearch('historical');
+                }}
+                style={styles.suggestionChip}
+                icon="book-open-page-variant"
+              >
+                Historical
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('beach');
+                  handleGooglePlacesSearch('beach');
+                }}
+                style={styles.suggestionChip}
+                icon="beach"
+              >
+                Beach
+              </Chip>
+              <Chip
+                mode="outlined"
+                onPress={() => {
+                  setSearchMode('google');
+                  setSearchQuery('food');
+                  handleGooglePlacesSearch('food');
+                }}
+                style={styles.suggestionChip}
+                icon="food"
+              >
+                Food
+              </Chip>
+            </ScrollView>
+          </View>
         </>
       )}
     </View>
@@ -796,7 +949,29 @@ const styles = StyleSheet.create({
   },
   switchButton: {
     marginTop: spacing.large,
-  }
+  },
+  categorySuggestionsContainer: {
+    marginTop: spacing.large,
+    width: '100%',
+    alignItems: 'center',
+  },
+  suggestionsTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    marginBottom: spacing.medium,
+    color: colors.text,
+    textAlign: 'center',
+  },
+  suggestionsScroll: {
+    marginTop: spacing.small,
+    width: '100%',
+    paddingHorizontal: spacing.small,
+  },
+  suggestionChip: {
+    margin: spacing.tiny,
+    backgroundColor: colors.surface,
+    borderColor: colors.primary,
+  },
 });
 
 export default SearchScreen;

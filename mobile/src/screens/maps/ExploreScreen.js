@@ -123,6 +123,11 @@ const ExploreScreen = ({ navigation, route }) => {
     }
   };
 
+  // Handle category search (new function)
+  const handleCategorySearch = (categoryName) => {
+    navigation.navigate('Search', { query: categoryName });
+  };
+
   // Filter locations by category
   const handleCategorySelect = (category) => {
     if (selectedCategory === category) {
@@ -308,6 +313,60 @@ const ExploreScreen = ({ navigation, route }) => {
         />
       </View>
 
+      {/* Popular Categories (New) */}
+      <View style={styles.popularCategoriesContainer}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+          <Chip
+            mode="outlined"
+            onPress={() => handleCategorySearch('adventure')}
+            style={styles.popularCategoryChip}
+            icon="hiking"
+          >
+            Adventure
+          </Chip>
+          <Chip
+            mode="outlined"
+            onPress={() => handleCategorySearch('cultural')}
+            style={styles.popularCategoryChip}
+            icon="temple-buddhist"
+          >
+            Cultural
+          </Chip>
+          <Chip
+            mode="outlined"
+            onPress={() => handleCategorySearch('historical')}
+            style={styles.popularCategoryChip}
+            icon="book-open-page-variant"
+          >
+            Historical
+          </Chip>
+          <Chip
+            mode="outlined"
+            onPress={() => handleCategorySearch('beach')}
+            style={styles.popularCategoryChip}
+            icon="beach"
+          >
+            Beach
+          </Chip>
+          <Chip
+            mode="outlined"
+            onPress={() => handleCategorySearch('food')}
+            style={styles.popularCategoryChip}
+            icon="food"
+          >
+            Food
+          </Chip>
+          <Chip
+            mode="outlined"
+            onPress={() => handleCategorySearch('wildlife')}
+            style={styles.popularCategoryChip}
+            icon="paw"
+          >
+            Wildlife
+          </Chip>
+        </ScrollView>
+      </View>
+
       {/* Category Filter */}
       {categories && categories.length > 0 && (
         <View style={styles.categoryContainer}>
@@ -396,9 +455,23 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.2,
     shadowRadius: 4,
   },
-  categoryContainer: {
+  popularCategoriesContainer: {
     position: 'absolute',
     top: 100,
+    left: 0,
+    right: 0,
+    paddingHorizontal: spacing.medium,
+    marginBottom: spacing.small,
+    zIndex: 1,
+  },
+  popularCategoryChip: {
+    margin: 4,
+    backgroundColor: colors.surface,
+    borderColor: colors.primary,
+  },
+  categoryContainer: {
+    position: 'absolute',
+    top: 150, // Adjusted to accommodate the new popular categories row
     left: 0,
     right: 0,
     paddingHorizontal: spacing.medium,

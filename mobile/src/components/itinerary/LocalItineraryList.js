@@ -108,6 +108,24 @@ const LocalItineraryList = ({ navigation, onRefresh }) => {
                   </Text>
                 </View>
               )}
+
+              {item.places && item.places.length > 0 && (
+                <View style={styles.placesContainer}>
+                  <Divider style={styles.divider} />
+                  <Text style={styles.placesTitle}>
+                    Places: {item.places.length}
+                  </Text>
+                  {item.places.slice(0, 3).map((place, index) => (
+                    <View key={index} style={styles.placeItem}>
+                      <MaterialIcons name="place" size={16} color={colors.primary} />
+                      <Text style={styles.placeName} numberOfLines={1}>{place.name}</Text>
+                    </View>
+                  ))}
+                  {item.places.length > 3 && (
+                    <Text style={styles.morePlaces}>...and {item.places.length - 3} more</Text>
+                  )}
+                </View>
+              )}
             </Card.Content>
             <Card.Actions>
               <Button
@@ -211,6 +229,28 @@ const styles = StyleSheet.create({
   },
   loadingText: {
     marginTop: spacing.medium,
+    color: colors.textSecondary,
+  },
+  placesContainer: {
+    marginTop: spacing.small,
+  },
+  placesTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: colors.primary,
+    marginBottom: spacing.tiny,
+  },
+  placeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: spacing.tiny,
+  },
+  placeName: {
+    fontSize: 14,
+    marginLeft: spacing.tiny,
+  },
+  morePlaces: {
+    fontSize: 14,
     color: colors.textSecondary,
   },
 });
