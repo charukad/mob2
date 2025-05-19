@@ -272,12 +272,10 @@ export const API_ENDPOINTS = {
   // Messaging endpoints
   MESSAGES: {
     CONVERSATIONS: '/messages/conversations',
-    CONVERSATIONS_CREATE: '/messages/conversation',
+    CONVERSATIONS_CREATE: '/messages/conversations',
     CONVERSATION_MESSAGES: (id) => `/messages/conversations/${id}`,
-    SEND: '/messages',
-    MARK_READ: (id) => `/messages/${id}/read`,
-    DELETE: (id) => `/messages/${id}`,
-    UNREAD_COUNT: '/messages/unread-count',
+    SEND: '/messages/send',
+    UNREAD_COUNT: '/messages/unread'
   },
   
   // Review endpoints

@@ -223,6 +223,8 @@ class ChatService {
   // Send a new message
   async sendMessage(recipientId, text, vehicleId = null, conversationId = null) {
     try {
+      console.log(`[ChatService] Sending message to ${recipientId}, vehicleId: ${vehicleId || 'none'}, conversationId: ${conversationId || 'new'}`);
+      
       // If we have a temporary conversation ID, handle locally
       if (conversationId && this._isTemporaryConversation(conversationId)) {
         console.log(`[ChatService] Sending message to temporary conversation: ${conversationId}`);
@@ -244,7 +246,7 @@ class ChatService {
           recipientInfo: await this._getRecipientInfo(recipientId),
           timestamp: new Date().toISOString(),
           conversationId,
-          vehicleId,
+          vehicleId, // Always include vehicleId when provided
           status: 'sent',
           isLocal: true
         };
@@ -257,7 +259,7 @@ class ChatService {
       
       // Try to send via API
       try {
-        console.log(`[ChatService] Sending message via API, conversationId: ${conversationId || 'new'}`);
+        console.log(`[ChatService] Sending message via API, conversationId: ${conversationId || 'new'}, vehicleId: ${vehicleId || 'none'}`);
         const token = await this._getAuthToken();
         if (!token) {
           throw new Error('Authentication required - No auth token available');
@@ -277,39 +279,115 @@ class ChatService {
             timestamp: new Date().toISOString(),
             vehicleId: vehicleId // Include vehicleId in metadata as well for better tracking
           },
-          // Ensure vehicleId is always included properly in payload when provided
+          // ALWAYS include vehicleId if provided (critical fix)
           ...(vehicleId && { vehicleId: vehicleId.toString() }),
+          // Only include conversationId if it's a valid server-side ID
           ...(conversationId && !this._isTemporaryConversation(conversationId) && { conversationId })
         };
         
         const endpoint = API_ENDPOINTS.MESSAGES.SEND;
         const url = `${API_URL}${endpoint}`;
-        console.log(`[ChatService] Sending message to: ${url}`, JSON.stringify(payload, null, 2));
+        console.log(`[ChatService] Sending message to API: ${url}`, JSON.stringify(payload, null, 2));
         
-        const response = await axios.post(
-          url,
-          payload,
-          {
-            headers: { 'Authorization': `Bearer ${token}` }
+        let success = false;
+        let successResponse = null;
+        
+        // Try the primary endpoint first
+        try {
+          const response = await axios.post(
+            url,
+            payload,
+            {
+              headers: { 'Authorization': `Bearer ${token}` }
+            }
+          );
+          
+          if (response.data.status === 'success') {
+            success = true;
+            successResponse = response;
+          } else {
+            console.log(`[ChatService] Primary endpoint returned non-success:`, response.data);
           }
-        );
+        } catch (primaryError) {
+          console.error(`[ChatService] Primary message endpoint ${endpoint} failed:`, primaryError.message);
+          
+          // Try fallback endpoints if primary fails
+          const fallbackEndpoints = [
+            '/messages/send',
+            '/messages',
+            '/conversations/send'
+          ];
+          
+          for (const fallbackEndpoint of fallbackEndpoints) {
+            if (success) break;
+            
+            try {
+              console.log(`[ChatService] Trying fallback endpoint: ${fallbackEndpoint}`);
+              const fallbackResponse = await axios.post(
+                `${API_URL}${fallbackEndpoint}`,
+                payload,
+                {
+                  headers: { 'Authorization': `Bearer ${token}` }
+                }
+              );
+              
+              if (fallbackResponse.data && 
+                 (fallbackResponse.data.status === 'success' || 
+                  fallbackResponse.data.message || 
+                  fallbackResponse.data.data?.message)) {
+                success = true;
+                successResponse = fallbackResponse;
+                console.log(`[ChatService] Successfully sent message via fallback endpoint: ${fallbackEndpoint}`);
+                break;
+              }
+            } catch (fallbackError) {
+              console.log(`[ChatService] Fallback endpoint ${fallbackEndpoint} also failed:`, fallbackError.message);
+              // Continue to the next fallback
+            }
+          }
+          
+          if (!success) {
+            throw primaryError; // Re-throw the original error if all fallbacks fail
+          }
+        }
         
-        if (response.data.status === 'success') {
-          const serverMessage = response.data.data.message;
-          const conversationId = response.data.data.conversationId;
+        if (success && successResponse) {
+          const response = successResponse;
+          const serverMessage = response.data.data?.message || response.data.message;
+          const responseConversationId = response.data.data?.conversationId || response.data.conversationId;
+          
+          // Verify we have at least a message or can create one
+          if (!serverMessage && !text) {
+            throw new Error('No message data returned from server and no original text available');
+          }
+          
+          // If no server message, create one from our original data
+          const messageToMap = serverMessage || {
+            id: `local_${Date.now()}`,
+            content: text,
+            senderId: payload.senderId || await this._getCurrentUserId(),
+            conversationId: responseConversationId || conversationId,
+            vehicleId: vehicleId,
+            timestamp: new Date().toISOString()
+          };
           
           // Map the server message to client format
-          const clientMessage = this._mapServerMessagesToClientFormat([serverMessage])[0];
+          const clientMessage = this._mapServerMessagesToClientFormat([messageToMap])[0];
           
-          console.log(`[ChatService] Message sent successfully, new conversation ID: ${conversationId}`);
+          // Use the conversation ID from the response if available, otherwise use the one we had
+          const finalConversationId = responseConversationId || conversationId;
+          
+          console.log(`[ChatService] Message sent successfully, conversation ID: ${finalConversationId}`);
           
           // Update local storage with the new message
-          await this._addMessageToStorage(conversationId, clientMessage);
+          if (finalConversationId) {
+            await this._addMessageToStorage(finalConversationId, clientMessage);
+          }
           
-          return { message: clientMessage, conversationId };
+          return { message: clientMessage, conversationId: finalConversationId };
         } else {
-          // Server returned non-success status
-          throw new Error(`API returned non-success status: ${response.data.status} - ${response.data.message || 'No error message'}`);
+          // Server returned non-success status and all fallbacks failed
+          throw new Error(`Failed to send message: No successful response from any endpoint`);
         }
       } catch (apiError) {
         // Format the error details and rethrow to be caught by outer try-catch
@@ -403,6 +481,14 @@ class ChatService {
   // Get or create a conversation with a user
   async getOrCreateConversation(recipientId, vehicleId = null) {
     try {
+      // Validate input parameters
+      if (!recipientId) {
+        throw new Error('RecipientId is required to create a conversation');
+      }
+      
+      // Debug logging for diagnosis
+      console.log(`[ChatService] getOrCreateConversation called with recipientId=${recipientId}, vehicleId=${vehicleId || 'none'}`);
+      
       // Check if we have a locally stored conversation
       let stored = await this._getStoredConversations();
       
@@ -430,7 +516,7 @@ class ChatService {
           return c.participantId._id.toString() === recipientIdValue.toString();
         }
         // If participantId is a string, compare directly with extracted ID
-        return c.participantId.toString() === recipientIdValue.toString();
+        return c.participantId && c.participantId.toString() === recipientIdValue.toString();
       });
       
       // If found a temporary conversation, just return it
@@ -440,7 +526,8 @@ class ChatService {
       }
       
       // If online, try to get or create via API
-      if (NetInfo && (await NetInfo.fetch()).isConnected) {
+      const isConnected = NetInfo && (await NetInfo.fetch()).isConnected;
+      if (isConnected) {
         console.log(`[ChatService] Network is connected, attempting API calls`);
         let apiSuccess = false;
         
@@ -451,72 +538,95 @@ class ChatService {
             throw new Error('Authentication required - No auth token available');
           }
           
-          // Use multiple possible endpoints to try
-          const apiUrl = await this._getApiUrlWithFallbacks();
-          const possibleEndpoints = [
-            // Try our defined endpoints first
-            API_ENDPOINTS.MESSAGES.CONVERSATIONS_CREATE,
-            // Then try various possible patterns
-            '/messages/conversation',
-            '/messages/conversations',
-            // Try more variations
-            '/chat/conversation',
-            '/chat/conversations',
-            '/conversation',
-            '/conversations',
-            // Vehicle specific endpoints
-            '/vehicles/messages',
-            '/vehicles/conversations',
-            // Last resort - try without leading slash
-            'messages/conversation',
-            'messages/conversations'
-          ];
+          // Prepare request payload - ALWAYS include vehicleId if provided
+          const payload = { 
+            recipientId: recipientIdValue,
+            ...(vehicleId && { vehicleId: vehicleId.toString() })
+          };
           
-          // Try API calls with multiple endpoint patterns
-          for (const endpoint of possibleEndpoints) {
-            const url = `${apiUrl}${endpoint}`;
-            console.log(`[ChatService] Trying to create conversation at: ${url}`);
+          console.log(`[ChatService] API payload for conversation: ${JSON.stringify(payload)}`);
+          
+          // Try the primary endpoint for creating/getting conversations
+          try {
+            const endpoint = API_ENDPOINTS.MESSAGES.CONVERSATIONS_CREATE;
+            const url = `${API_URL}${endpoint}`;
+            console.log(`[ChatService] Attempting to create conversation at: ${url} with payload:`, payload);
             
+            const response = await axios.post(
+              url,
+              payload,
+              {
+                headers: { 
+                  'Authorization': `Bearer ${token}`,
+                  'Content-Type': 'application/json'
+                }
+              }
+            );
+            
+            // Check for valid response format
+            if (response.data && (response.data.status === 'success') && response.data.data && response.data.data.conversation) {
+              apiSuccess = true;
+              conversation = response.data.data.conversation;
+              console.log(`[ChatService] Successfully created conversation via API: ${conversation._id || conversation.id}`);
+              
+              // Ensure id is properly set (normalize the field name)
+              conversation.id = conversation._id || conversation.id;
+              
+              // Double-check that vehicleId is properly set in the conversation
+              if (vehicleId && (!conversation.vehicleId || conversation.vehicleId.toString() !== vehicleId.toString())) {
+                console.log(`[ChatService] Adding vehicleId ${vehicleId} to returned conversation`);
+                conversation.vehicleId = vehicleId;
+              }
+              
+              // Update local storage
+              await this._updateStoredConversation(conversation);
+              return conversation;
+            } else {
+              console.log(`[ChatService] API returned unexpected data format:`, response.data);
+              throw new Error(`API returned unexpected data format: ${JSON.stringify(response.data)}`);
+            }
+          } catch (error) {
+            console.error(`[ChatService] Error creating conversation:`, error.message);
+            
+            // Try an alternate endpoint as fallback if first one failed
             try {
-              console.log(`[ChatService] Creating conversation with vehicleId: ${vehicleId || 'none'}`);
-              const payload = { 
-                recipientId: recipientIdValue,
-                ...(vehicleId && { vehicleId: vehicleId.toString() })
-              };
-              console.log(`[ChatService] API payload: ${JSON.stringify(payload)}`);
+              const fallbackEndpoint = '/conversations';
+              const fallbackUrl = `${API_URL}${fallbackEndpoint}`;
+              console.log(`[ChatService] Trying fallback endpoint: ${fallbackUrl}`);
               
               const response = await axios.post(
-                url,
+                fallbackUrl,
                 payload,
                 {
-                  headers: { 'Authorization': `Bearer ${token}` }
+                  headers: { 
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json'
+                  }
                 }
               );
               
-              if (response.data.status === 'success') {
+              if (response.data && response.data.data && response.data.data.conversation) {
                 apiSuccess = true;
                 conversation = response.data.data.conversation;
-                console.log(`[ChatService] Successfully created conversation via API: ${conversation.id}`);
+                console.log(`[ChatService] Successfully created conversation via fallback API: ${conversation._id || conversation.id}`);
+                
+                // Ensure id is properly set (normalize the field name)
+                conversation.id = conversation._id || conversation.id;
+                
+                // Double-check that vehicleId is properly set
+                if (vehicleId && (!conversation.vehicleId || conversation.vehicleId.toString() !== vehicleId.toString())) {
+                  conversation.vehicleId = vehicleId;
+                }
                 
                 // Update local storage
                 await this._updateStoredConversation(conversation);
                 return conversation;
-              } else {
-                console.log(`[ChatService] API returned non-success status at ${endpoint}`);
               }
-            } catch (endpointError) {
-              const statusCode = endpointError.response?.status;
-              console.log(`[ChatService] Endpoint ${endpoint} failed with status ${statusCode || 'unknown'}: ${endpointError.message}`);
-              
-              // If it's not a 404, don't try further endpoints
-              if (endpointError.response && statusCode !== 404) {
-                console.log(`[ChatService] Non-404 error (${statusCode}), stopping API attempts`);
-                throw endpointError;
-              }
+            } catch (fallbackError) {
+              console.error(`[ChatService] Fallback endpoint also failed:`, fallbackError.message);
+              throw error; // Throw the original error
             }
           }
-          
-          console.log(`[ChatService] All API endpoints failed, will use local conversation`);
         } catch (apiError) {
           this._logError('getOrCreateConversation.api', apiError, { 
             recipientId, 
@@ -529,19 +639,23 @@ class ChatService {
         console.log(`[ChatService] Network is not connected, skipping API calls`);
       }
       
+      // If we don't have a conversation yet, create a temporary one
       if (!conversation) {
         // If we reach here, we need to create a local temporary conversation
         console.log(`[ChatService] No existing conversation found, creating temporary one for recipient ${recipientIdValue}`);
         const tempId = `temp_${Date.now()}`;
         const newTempConversation = {
           id: tempId,
+          _id: tempId, // Include both formats for compatibility
           // Store both full object (to keep user details) and just the ID (for lookups)
+          participants: [recipientId, "current_user"],
           participantId: recipientId,
           recipientId: recipientIdValue,
-          vehicleId,
+          // Always include vehicleId if provided
+          vehicleId: vehicleId,
           lastMessage: null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
           isTemporary: true
         };
         
@@ -549,12 +663,13 @@ class ChatService {
           // Store in local storage
           stored.push(newTempConversation);
           await this._storeConversations(stored);
-          console.log(`[ChatService] Successfully created temporary conversation: ${tempId}`);
+          console.log(`[ChatService] Successfully created temporary conversation: ${tempId} with vehicleId: ${vehicleId || 'none'}`);
           return newTempConversation;
         } catch (storageError) {
           this._logError('getOrCreateConversation.localStorage', storageError, { 
             recipientId,
-            tempId 
+            tempId,
+            vehicleId
           });
           throw new Error(`Failed to store temporary conversation: ${storageError.message}`);
         }
@@ -808,9 +923,9 @@ class ChatService {
       const token = await this._getAuthToken();
       if (token) {
         try {
-          // Try to get user profile with the token
+          // Try to get user profile with the token - use correct endpoint from API_ENDPOINTS
           const response = await axios.get(
-            `${API_URL}/api/auth/me`,
+            `${API_URL}${API_ENDPOINTS.AUTH.ME}`,
             {
               headers: { 'Authorization': `Bearer ${token}` }
             }
@@ -826,23 +941,42 @@ class ChatService {
         } catch (apiError) {
           console.error('[ChatService] API error getting user profile:', apiError.message);
           
-          // Create a temporary default user since we have a token but couldn't get the profile
-          if (token) {
-            const defaultUser = {
-              _id: 'default_user',
-              name: 'Current User',
-              email: 'user@example.com',
-              createdAt: new Date().toISOString()
-            };
+          // Try alternate endpoint if first one fails
+          try {
+            console.log('[ChatService] Trying alternate profile endpoint');
+            const altResponse = await axios.get(
+              `${API_URL}${API_ENDPOINTS.USERS.PROFILE}`,
+              {
+                headers: { 'Authorization': `Bearer ${token}` }
+              }
+            );
             
-            try {
-              // Save this default user for consistency
-              await AsyncStorage.setItem('user', JSON.stringify(defaultUser));
-              console.log('[ChatService] Created and saved default user with ID: default_user');
-              return defaultUser._id;
-            } catch (storageError) {
-              console.error('[ChatService] Error saving default user:', storageError);
+            if (altResponse.data && altResponse.data.data && altResponse.data.data.user) {
+              const user = altResponse.data.data.user;
+              await AsyncStorage.setItem('user', JSON.stringify(user));
+              console.log(`[ChatService] Retrieved and saved user ID from profile: ${user._id}`);
+              return user._id;
             }
+          } catch (altError) {
+            console.log('[ChatService] Alternate profile endpoint also failed:', altError.message);
+          }
+          
+          // Create a temporary default user since we have a token but couldn't get the profile
+          console.log('[ChatService] Creating fallback default user');
+          const defaultUser = {
+            _id: 'currentuser_' + Date.now(),
+            name: 'Current User',
+            email: 'user@example.com',
+            createdAt: new Date().toISOString()
+          };
+          
+          try {
+            // Save this default user for consistency
+            await AsyncStorage.setItem('user', JSON.stringify(defaultUser));
+            console.log(`[ChatService] Created and saved default user with ID: ${defaultUser._id}`);
+            return defaultUser._id;
+          } catch (storageError) {
+            console.error('[ChatService] Error saving default user:', storageError);
           }
         }
       }

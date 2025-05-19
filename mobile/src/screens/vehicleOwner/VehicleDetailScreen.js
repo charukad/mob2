@@ -8,7 +8,8 @@ import {
   TouchableOpacity, 
   ActivityIndicator, 
   Dimensions,
-  FlatList 
+  FlatList,
+  Alert
 } from 'react-native';
 import { Card, Divider, Button, Chip } from 'react-native-paper';
 import axios from 'axios';
@@ -318,17 +319,52 @@ const VehicleDetailScreen = ({ route, navigation }) => {
             const ownerName = vehicle.ownerName || vehicle.owner?.name || 'Vehicle Owner';
             const ownerAvatar = vehicle.ownerAvatar || vehicle.owner?.avatar;
             
+            if (!ownerId) {
+              // Owner ID is required for chat functionality
+              alert('Cannot identify vehicle owner. Please try again later.');
+              return;
+            }
+            
+            // Ensure we have a valid vehicle ID
+            const vehicleId = vehicle._id || vehicle.id;
+            if (!vehicleId) {
+              console.error('[VehicleDetailScreen] No vehicle ID available for chat');
+              alert('Cannot start chat: Vehicle information is incomplete.');
+              return;
+            }
+            
+            console.log(`[VehicleDetailScreen] Starting chat with VEHICLE OWNER about vehicle: ${vehicleId}`);
+            
+            // Show full details of what's being passed to help with debugging
+            console.log('[VehicleDetailScreen] Chat navigation EXACT params:', {
+              participantId: ownerId,
+              participantName: ownerName,
+              participantAvatar: ownerAvatar,
+              vehicleId: vehicleId,
+              vehicleName: `${vehicle.make} ${vehicle.model}`
+            });
+            
+            if (!ownerId || !vehicleId) {
+              console.error(`[VehicleDetailScreen] CRITICAL ERROR - Missing required data: ownerId=${ownerId}, vehicleId=${vehicleId}`);
+              Alert.alert(
+                'Error',
+                'Missing required vehicle or owner information. Please try again later.',
+                [{ text: 'OK' }]
+              );
+              return;
+            }
+            
             // Create a new chat or navigate to existing chat
             navigation.navigate('ChatDetail', {
               participantId: ownerId,
               participantName: ownerName,
               participantAvatar: ownerAvatar,
-              vehicleId: vehicle._id,
-              vehicleName: `${vehicle.make} ${vehicle.model}`,
-              chatId: `temp-${Date.now()}`, // In a real app, this would be a server-generated chat ID
+              vehicleId: vehicleId,
+              vehicleName: `${vehicle.make} ${vehicle.model}`
             });
           } else {
             // Fallback if owner information is missing
+            console.error('[VehicleDetailScreen] Missing owner information for vehicle:', vehicle._id);
             alert('Cannot connect to the owner at this moment. Please try again later.');
           }
         }}

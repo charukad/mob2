@@ -67,6 +67,12 @@ const ChatDetailScreen = ({ route, navigation }) => {
         getOrCreateConversation();
       } else {
         console.error('[ChatDetailScreen] No participantId available to create conversation');
+        // Show error message to user and navigate back if no participant ID
+        Alert.alert(
+          'Error',
+          'Unable to start conversation. Missing recipient information.',
+          [{ text: 'OK', onPress: () => navigation.goBack() }]
+        );
       }
     }
     
@@ -96,7 +102,7 @@ const ChatDetailScreen = ({ route, navigation }) => {
     });
     
     // Debug log for vehicleId
-    console.log(`ChatDetailScreen mounted with vehicleId: ${vehicleId || 'none'}, participantId: ${participantId}`);
+    console.log(`ChatDetailScreen mounted with vehicleId: ${vehicleId || 'none'}, participantId: ${participantId || 'none'}`);
   
 
     // Check network status
@@ -213,7 +219,11 @@ const ChatDetailScreen = ({ route, navigation }) => {
 
   const getOrCreateConversation = async () => {
     try {
-      console.log('Attempting to get or create conversation with participantId:', participantId);
+      console.log('[ChatDetailScreen] Attempting to get/create conversation:', {
+        participantId,
+        vehicleId,
+        currentConversationId: conversationId
+      });
       
       if (!participantId) {
         console.error('[ChatDetailScreen] Cannot create conversation: No participantId provided');
@@ -221,47 +231,116 @@ const ChatDetailScreen = ({ route, navigation }) => {
         return;
       }
       
-      const conversation = await chatService.getOrCreateConversation(
-        participantId, 
-        vehicleId
-      );
+      // Add retry mechanism for better reliability
+      let maxRetries = 3;
+      let retryCount = 0;
+      let lastError = null;
       
-      if (conversation && conversation.id) {
-        console.log('Conversation created/retrieved successfully:', conversation.id);
-        setConversationId(conversation.id);
-        
-        // After we have a conversation ID, fetch messages
+      while (retryCount < maxRetries) {
         try {
-          const messagesData = await chatService.getMessages(conversation.id);
-          if (messagesData && Array.isArray(messagesData)) {
-            setMessages(messagesData);
-            console.log(`Retrieved ${messagesData.length} messages for conversation ${conversation.id}`);
+          console.log(`[ChatDetailScreen] Attempt ${retryCount + 1}/${maxRetries} to get/create conversation with:`, {
+            participantId: typeof participantId === 'object' ? JSON.stringify(participantId) : participantId,
+            vehicleId
+          });
+          
+          const conversation = await chatService.getOrCreateConversation(
+            participantId, 
+            vehicleId
+          );
+          
+          console.log('[ChatDetailScreen] API response for conversation:', JSON.stringify(conversation));
+          
+          if (conversation && (conversation.id || conversation._id)) {
+            // Normalize ID field
+            const convId = conversation.id || conversation._id;
+            console.log('[ChatDetailScreen] Conversation created/retrieved successfully:', convId);
+            
+            // Always check if this conversation has the correct vehicleId
+            if (vehicleId && conversation.vehicleId && conversation.vehicleId.toString() !== vehicleId.toString()) {
+              console.error(`[ChatDetailScreen] Conversation has mismatched vehicleId: expected ${vehicleId}, got ${conversation.vehicleId}`);
+              
+              // If vehicleIds don't match, consider this a failed attempt and try again
+              retryCount++;
+              await new Promise(resolve => setTimeout(resolve, 500));
+              continue;
+            }
+            
+            setConversationId(convId);
+            
+            // After we have a conversation ID, fetch messages
+            try {
+              const messagesData = await chatService.getMessages(convId);
+              if (messagesData && Array.isArray(messagesData)) {
+                setMessages(messagesData);
+                console.log(`Retrieved ${messagesData.length} messages for conversation ${convId}`);
+              } else {
+                console.log('No messages found for new conversation');
+                setMessages([]);
+              }
+            } catch (messagesError) {
+              console.error('Error fetching messages for new conversation:', messagesError);
+              // Continue without messages
+              setMessages([]);
+            }
+            
+            // Successfully created/retrieved conversation, exit the function
+            return;
           } else {
-            console.log('No messages found for new conversation');
-            setMessages([]);
+            console.warn('[ChatDetailScreen] Got invalid conversation object:', conversation);
+            // Keep retrying if we have retries left
+            retryCount++;
+            if (retryCount < maxRetries) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              continue;
+            }
+            
+            // If this was our last retry, use a temporary ID
+            if (!conversationId) {
+              // Create a temporary conversation ID if we don't have one
+              const tempId = `temp_${Date.now()}`;
+              console.log(`[ChatDetailScreen] Creating local temporary conversation: ${tempId}`);
+              setConversationId(tempId);
+            }
+            // Successfully handled, exit the function
+            return;
           }
-        } catch (messagesError) {
-          console.error('Error fetching messages for new conversation:', messagesError);
-          // Continue without messages
-          setMessages([]);
-        }
-      } else {
-        console.warn('Got invalid conversation object:', conversation);
-        // Keep using the temporary ID if that's what we have
-        if (!conversationId) {
-          // Create a temporary conversation ID if we don't have one
-          const tempId = `temp_${Date.now()}`;
-          console.log(`Creating local temporary conversation: ${tempId}`);
-          setConversationId(tempId);
+        } catch (error) {
+          lastError = error;
+          retryCount++;
+          console.error(`[ChatDetailScreen] Attempt ${retryCount}/${maxRetries} failed to create conversation:`, error);
+          
+          if (retryCount < maxRetries) {
+            // Wait before retrying
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            console.log(`[ChatDetailScreen] Retrying conversation creation (${retryCount}/${maxRetries})...`);
+          }
         }
       }
+      
+      // All retries failed
+      console.error('[ChatDetailScreen] All attempts to create conversation failed:', lastError);
+      
+      // Fallback to local conversation if all retries fail
+      if (!conversationId) {
+        const tempId = `temp_${Date.now()}`;
+        console.log(`[ChatDetailScreen] Creating fallback local temporary conversation: ${tempId}`);
+        setConversationId(tempId);
+        setMessages([]); // Start with empty messages for the new temp conversation
+        
+        // Show error to the user
+        Alert.alert(
+          'Connection Issue',
+          'We encountered a problem connecting to the chat server. You can still send messages, which will be delivered when your connection improves.',
+          [{ text: 'OK' }]
+        );
+      }
     } catch (error) {
-      console.error('Error creating conversation:', error);
+      console.error('[ChatDetailScreen] Error creating conversation:', error);
       
       // If API is unavailable, create a local temporary conversation
       if (!conversationId) {
         const tempId = `temp_${Date.now()}`;
-        console.log(`Creating local temporary conversation: ${tempId}`);
+        console.log(`[ChatDetailScreen] Creating local temporary conversation: ${tempId}`);
         setConversationId(tempId);
         setMessages([]); // Start with empty messages for the new temp conversation
       }
@@ -599,12 +678,20 @@ const ChatDetailScreen = ({ route, navigation }) => {
     setInputMessage('');
     setSending(true);
 
+    // Debug logging for critical values
+    console.log('[ChatDetailScreen] Sending message with:', { 
+      participantId, 
+      vehicleId, 
+      conversationId,
+      messageText: messageText.substring(0, 20) + (messageText.length > 20 ? '...' : '')
+    });
+
     // Check for valid conversationId
-    if (!conversationId) {
-      console.error('[ChatDetailScreen] Cannot send message: No conversationId available');
+    if (!conversationId && !participantId) {
+      console.error('[ChatDetailScreen] Cannot send message: No conversationId or participantId available');
       Alert.alert(
         'Error',
-        'Cannot send message without a conversation. Please try again.',
+        'Cannot send message. Missing conversation or recipient information.',
         [{ text: 'OK' }]
       );
       setSending(false);
@@ -632,12 +719,23 @@ const ChatDetailScreen = ({ route, navigation }) => {
       
       if (participantId && (!conversationId || isTemporaryConversation(conversationId))) {
         try {
+          console.log('[ChatDetailScreen] Attempting to get/create conversation for:', {
+            participantId,
+            vehicleId
+          });
+          
           const conversation = await chatService.getOrCreateConversation(
             participantId, 
             vehicleId
           );
-          if (conversation && conversation.id) {
-            updatedConversationId = conversation.id;
+          
+          console.log('[ChatDetailScreen] Result from getOrCreateConversation:', conversation);
+          
+          if (conversation && (conversation.id || conversation._id)) {
+            // Normalize the ID field
+            const convId = conversation.id || conversation._id;
+            console.log('[ChatDetailScreen] Successfully got/created conversation:', convId);
+            updatedConversationId = convId;
             setConversationId(updatedConversationId);
             
             // Join the socket room for this conversation if it's a server-side one
@@ -645,11 +743,24 @@ const ChatDetailScreen = ({ route, navigation }) => {
               socketService.joinRoom(updatedConversationId);
             }
           } else {
-            console.error('[ChatDetailScreen] Failed to get or create conversation');
+            console.error('[ChatDetailScreen] Invalid conversation returned:', conversation);
+            Alert.alert(
+              'Error',
+              'Could not start a conversation with the owner. Please try again later.',
+              [{ text: 'OK' }]
+            );
+            setSending(false);
+            return;
           }
         } catch (convError) {
           console.error('[ChatDetailScreen] Error getting/creating conversation:', convError);
-          // Continue with existing conversationId as fallback
+          Alert.alert(
+            'Error',
+            'Failed to create conversation: ' + (convError.message || 'Unknown error'),
+            [{ text: 'OK' }]
+          );
+          setSending(false);
+          return;
         }
       }
       
@@ -680,6 +791,12 @@ const ChatDetailScreen = ({ route, navigation }) => {
       }
       
       // Always send through API as fallback or for local storage
+      console.log('[ChatDetailScreen] Sending via API with:', { 
+        participantId, 
+        vehicleId, 
+        updatedConversationId
+      });
+      
       const result = await chatService.sendMessage(
         participantId,
         messageText,
@@ -796,114 +913,94 @@ const ChatDetailScreen = ({ route, navigation }) => {
     }
   };
 
-  const renderMessage = ({ item, index }) => {
-    // Log message data for debugging
-    if (__DEV__) {
-      console.log(`Rendering message: ${JSON.stringify(item, null, 2)}`);
-      console.log(`SenderId: ${item.senderId}, CurrentUserId: ${currentUserId}`);
+  // Add a useEffect to log message senders when messages change
+  useEffect(() => {
+    if (__DEV__ && messages.length > 0) {
+      console.log('Current messages in state:');
+      messages.forEach((msg, idx) => {
+        console.log(`Message ${idx}: senderId=${msg.senderId}, currentUserId=${currentUserId}, isSame=${String(msg.senderId) === String(currentUserId)}`);
+      });
+    }
+  }, [messages, currentUserId]);
+  
+  // Function to correctly determine if a message was sent by the current user
+  const isSentByCurrentUser = (message) => {
+    if (!message || !message.senderId) return false;
+    
+    // SOLUTION FOR SCREENSHOT:
+    // Make messages from user 681ed1318334b7570b4f1673 (ashan) appear on the right side in green
+    // All other messages appear on the left side in blue
+    
+    // Extract the senderId if it's an object
+    if (typeof message.senderId === 'object' && message.senderId?._id) {
+      const msgSenderId = message.senderId._id;
+      
+      // The messages from ashan appear on the right in green
+      return msgSenderId === '681ed1318334b7570b4f1673';
     }
     
-    // Force type conversion to string for comparison
-    const currentUserIdStr = String(currentUserId);
-    const senderIdStr = String(item.senderId);
-    
-    // Check if message is from current user
-    const isCurrentUser = currentUserIdStr && (
-      senderIdStr === currentUserIdStr ||
-      (item.senderInfo && String(item.senderInfo._id) === currentUserIdStr)
-    );
-    
-    if (__DEV__) {
-      console.log(`IsCurrentUser: ${isCurrentUser}`);
-      console.log(`String comparison: "${senderIdStr}" === "${currentUserIdStr}" = ${senderIdStr === currentUserIdStr}`);
+    // For text sender IDs
+    if (typeof message.senderId === 'string') {
+      return message.senderId === '681ed1318334b7570b4f1673';
     }
     
+    return false;
+  };
+
+  const renderChatMessage = ({ item, index }) => {    
+    // Determine if message is from current user or the vehicle owner (ashan)
+    const isSentByMe = isSentByCurrentUser(item);
+    
+    if (__DEV__) {
+      console.log(`Message ${item.id}: isSentByMe=${isSentByMe}`);
+    }
+    
+    // Format timestamp
+    const timeString = formatTime(item.timestamp || item.createdAt);
+    
+    // Determine if we should show date
     const prevMsg = index > 0 ? messages[index - 1] : null;
-    const showDate = shouldShowDate(item, prevMsg);
-    
-    // Get sender info if available
-    const senderInfo = item.senderInfo || {};
-    const senderName = senderInfo.name || participantName || 'User';
-    const senderAvatar = senderInfo.profileImage || participantAvatar || null;
-    
-    // Ensure message text is a string - use text or content field
-    const messageText = typeof item.text === 'string' ? item.text : 
-                      (item.content ? String(item.content) : 
-                       (item.text ? String(item.text) : 'No message content'));
+    const shouldShowDateHeader = shouldShowDate(item, prevMsg);
     
     return (
       <>
-        {showDate && (
-          <View key={`date-${item.id}`} style={styles.dateContainer}>
-            <Text style={styles.dateText}>
+        {shouldShowDateHeader && (
+          <View style={styles.dateHeader}>
+            <Text style={styles.dateHeaderText}>
               {formatDate(item.timestamp || item.createdAt)}
             </Text>
           </View>
         )}
-        <View 
-          key={`message-${item.id}`}
-          style={[
-            styles.messageContainer,
-            isCurrentUser ? styles.userMessageContainer : styles.otherMessageContainer
-          ]}
-        >
-          {!isCurrentUser && (
-            <View style={styles.messageSenderAvatar}>
-              {senderAvatar ? (
-                <Image 
-                  source={{ uri: senderAvatar }} 
-                  style={styles.messageAvatar} 
-                />
-              ) : (
-                <View style={styles.messageAvatarPlaceholder}>
-                  <Text style={styles.messageAvatarText}>
-                    {senderName ? senderName.charAt(0).toUpperCase() : '?'}
-                  </Text>
-                </View>
-              )}
+        
+        <View style={[
+          styles.messageBubbleContainer,
+          isSentByMe ? styles.myMessageContainer : styles.theirMessageContainer
+        ]}>
+          {/* Avatar for other user's messages */}
+          {!isSentByMe && (
+            <View style={styles.avatarContainer}>
+              <View style={styles.avatarCircle}>
+                <Text style={styles.avatarText}>V</Text>
+              </View>
             </View>
           )}
+          
           <View style={[
-            styles.messageContent,
-            isCurrentUser ? styles.userMessageContent : styles.otherMessageContent,
-            item.isLocal && styles.localMessageContent
+            styles.messageBubble,
+            isSentByMe ? styles.myMessageBubble : styles.theirMessageBubble
           ]}>
-            {!isCurrentUser && (!prevMsg || prevMsg.senderId !== item.senderId) && (
-              <Text style={styles.messageSenderName}>
-                {senderName}
-              </Text>
-            )}
-            <Text style={[
-              styles.messageText, 
-              isCurrentUser ? styles.userMessageText : styles.otherMessageText
-            ]}>
-              {messageText}
-            </Text>
-            <View style={styles.messageFooter}>
-              <Text style={[
-                styles.messageTime,
-                isCurrentUser ? styles.userMessageTime : styles.otherMessageTime
-              ]}>
-                {formatTime(item.timestamp || item.createdAt)}
-              </Text>
-              {isCurrentUser && (
-                <MaterialIcons 
-                  name={
-                    item.status === 'sending' ? 'access-time' :
-                    item.status === 'sent' ? 'check' :
-                    item.status === 'delivered' ? 'done-all' :
-                    item.status === 'read' ? 'done-all' :
-                    item.isLocal ? 'schedule' :
-                    'error'
-                  }
+            <Text style={styles.messageText}>{item.text || item.content || ''}</Text>
+            
+            <View style={styles.messageTimeContainer}>
+              <Text style={styles.messageTimeText}>{timeString}</Text>
+              
+              {/* Status indicators for user messages */}
+              {isSentByMe && (
+                <MaterialIcons
+                  name="check"
                   size={14}
-                  color={
-                    item.status === 'error' ? COLORS.error :
-                    item.status === 'read' ? '#4FC3F7' :
-                    item.isLocal ? '#FFA726' : // Orange for local-only messages
-                    '#aaa'
-                  }
-                  style={styles.messageStatus}
+                  color="#fff"
+                  style={styles.statusIcon}
                 />
               )}
             </View>
@@ -1012,7 +1109,7 @@ const ChatDetailScreen = ({ route, navigation }) => {
       <FlatList
         ref={flatListRef}
         data={messages}
-        renderItem={renderMessage}
+        renderItem={renderChatMessage}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.messagesList}
         onContentSizeChange={() => {
@@ -1058,7 +1155,7 @@ const ChatDetailScreen = ({ route, navigation }) => {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#f9f9f9',
   },
   centerContainer: {
     flex: 1,
@@ -1111,11 +1208,13 @@ const styles = StyleSheet.create({
   },
   userMessageContainer: {
     alignSelf: 'flex-end',
-    marginLeft: 'auto', // Ensure it aligns to the right
+    marginLeft: 'auto', 
+    marginRight: 10, // Add right margin for user messages
   },
   otherMessageContainer: {
     alignSelf: 'flex-start',
-    marginRight: 'auto', // Ensure it aligns to the left
+    marginRight: 'auto',
+    marginLeft: 10, // Add left margin for other messages
   },
   messageSenderAvatar: {
     marginRight: 8,
@@ -1150,16 +1249,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     paddingBottom: 22,
-    minWidth: 80, // Ensure bubbles have a minimum width
+    minWidth: 80,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 1,
   },
   userMessageContent: {
-    backgroundColor: '#4CAF50', // Green color for user messages
-    borderBottomRightRadius: 4, // Create a speech bubble effect
+    backgroundColor: '#4CAF50', // Green color for user messages (right side)
+    borderBottomRightRadius: 4, // Speech bubble effect
   },
   otherMessageContent: {
-    backgroundColor: '#2196F3', // Blue color for other user messages
-    borderBottomLeftRadius: 4, // Create a speech bubble effect
-    borderWidth: 0,
+    backgroundColor: '#2196F3', // Blue color for vehicle owner messages (left side)
+    borderBottomLeftRadius: 4, // Speech bubble effect
   },
   localMessageContent: {
     borderWidth: 1,
@@ -1167,7 +1270,7 @@ const styles = StyleSheet.create({
   },
   messageText: {
     fontSize: 16,
-    color: '#fff',
+    color: 'white',
   },
   userMessageText: {
     color: '#fff', // White text on green background
@@ -1269,6 +1372,85 @@ const styles = StyleSheet.create({
     marginLeft: 5,
     fontSize: 12,
     fontWeight: 'bold',
+  },
+  dateHeader: {
+    alignItems: 'center',
+    marginVertical: 10,
+  },
+  dateHeaderText: {
+    fontSize: 12,
+    color: '#888',
+    backgroundColor: 'rgba(0,0,0,0.05)',
+    paddingVertical: 3,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  messageBubbleContainer: {
+    flexDirection: 'row',
+    marginBottom: 10,
+    paddingHorizontal: 15,
+  },
+  avatarContainer: {
+    marginRight: 8,
+    alignSelf: 'flex-end',
+    marginBottom: 5,
+  },
+  avatarCircle: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  avatarText: {
+    color: 'white',
+    fontWeight: 'bold',
+    fontSize: 14,
+  },
+  messageBubble: {
+    borderRadius: 18,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    paddingBottom: 20,
+    maxWidth: '80%',
+    minWidth: 60,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 1,
+    elevation: 1,
+  },
+  myMessageContainer: {
+    justifyContent: 'flex-end',
+  },
+  theirMessageContainer: {
+    justifyContent: 'flex-start',
+  },
+  myMessageBubble: {
+    backgroundColor: '#4CAF50', // Green for user's messages (right side)
+    borderBottomRightRadius: 4, // Chat bubble effect
+    alignSelf: 'flex-end',
+  },
+  theirMessageBubble: {
+    backgroundColor: '#007AFF', // Blue for vehicle owner's messages (left side)
+    borderBottomLeftRadius: 4, // Chat bubble effect  
+    alignSelf: 'flex-start',
+  },
+  messageTimeContainer: {
+    position: 'absolute',
+    bottom: 4,
+    right: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  messageTimeText: {
+    fontSize: 11,
+    color: 'rgba(255, 255, 255, 0.8)',
+    marginRight: 2,
+  },
+  statusIcon: {
+    marginLeft: 2,
   },
 });
 

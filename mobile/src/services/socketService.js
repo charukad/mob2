@@ -394,21 +394,70 @@ class SocketService {
    * @returns {boolean} - Success status
    */
   joinRoom = (conversationId) => {
-    if (!conversationId) {
-      if (__DEV__) console.error('[SocketService] Cannot join room: Missing conversation ID');
+    try {
+      if (!conversationId) {
+        if (__DEV__) console.error('[SocketService] Cannot join room: No conversation ID provided');
+        return false;
+      }
+      
+      // Skip if already in this room
+      if (this.rooms.has(conversationId)) {
+        if (this.enableLogging) {
+          logger.log(`[SocketService] Already in room ${conversationId}`);
+        }
+        return true;
+      }
+      
+      // Don't attempt to join if not connected
+      if (!this.connected || !this.socket) {
+        if (__DEV__) console.log(`[SocketService] Cannot join room ${conversationId}: Socket not connected`);
+        // Try to establish connection first
+        this.init().then(connected => {
+          if (connected) {
+            // Now try to join room again
+            if (__DEV__) console.log(`[SocketService] Connection established, now joining room ${conversationId}`);
+            this._joinRoomInternal(conversationId);
+          } else {
+            if (__DEV__) console.log(`[SocketService] Failed to connect, cannot join room ${conversationId}`);
+          }
+        });
+        return false;
+      }
+      
+      return this._joinRoomInternal(conversationId);
+    } catch (error) {
+      if (__DEV__) console.error(`[SocketService] Error joining room ${conversationId}:`, error);
       return false;
     }
-    
-    if (!this.socket || !this.connected) {
-      if (__DEV__) console.log(`[SocketService] Cannot join room ${conversationId}: Socket not connected`);
-      this.rooms.add(conversationId); // Store to join when connected
-      return false;
-    }
+  };
 
-    this.socket.emit('join_room', { conversationId });
-    this.rooms.add(conversationId);
-    if (__DEV__) console.log(`[SocketService] Joined room: ${conversationId}`);
-    return true;
+  // Internal method to actually join a room
+  _joinRoomInternal = (conversationId) => {
+    try {
+      if (this.enableLogging) {
+        logger.log(`[SocketService] Joining room: ${conversationId}`);
+      }
+      
+      // Emit the join event
+      this.socket.emit('join_room', { conversationId }, (response) => {
+        if (response && response.status === 'success') {
+          if (this.enableLogging) {
+            logger.log(`[SocketService] Successfully joined room ${conversationId}`);
+          }
+          // Track that we've joined this room
+          this.rooms.add(conversationId);
+        } else {
+          if (__DEV__) console.error(`[SocketService] Failed to join room ${conversationId}:`, response?.message || 'No error message');
+        }
+      });
+      
+      // Consider it successful if we emitted the event
+      this.rooms.add(conversationId);
+      return true;
+    } catch (error) {
+      if (__DEV__) console.error(`[SocketService] Error in _joinRoomInternal for ${conversationId}:`, error);
+      return false;
+    }
   };
 
   /**
@@ -438,34 +487,52 @@ class SocketService {
    * @returns {boolean} - Success status
    */
   sendMessage = (conversationId, message, metadata = {}) => {
-    if (!conversationId || !message) {
-      if (__DEV__) console.error('[SocketService] Cannot send message: Missing required parameters');
+    try {
+      if (!conversationId || !message) {
+        if (__DEV__) console.error('[SocketService] Cannot send message: Missing conversationId or message');
+        return false;
+      }
+      
+      // Check if socket is connected
+      if (!this.connected || !this.socket) {
+        if (__DEV__) console.log(`[SocketService] Cannot send message: Socket not connected`);
+        return false;
+      }
+      
+      // Make sure we're in the room before sending
+      if (!this.rooms.has(conversationId)) {
+        if (__DEV__) console.log(`[SocketService] Joining room ${conversationId} before sending message`);
+        this.joinRoom(conversationId);
+      }
+      
+      // Prepare message data with metadata
+      const messageData = {
+        conversationId,
+        content: message,
+        ...metadata,
+        timestamp: new Date().toISOString()
+      };
+      
+      if (this.enableLogging) {
+        logger.log(`[SocketService] Sending message to room ${conversationId}`);
+      }
+      
+      // Send with acknowledgement callback
+      this.socket.emit('send_message', messageData, (response) => {
+        if (response && response.status === 'success') {
+          if (this.enableLogging) {
+            logger.log(`[SocketService] Message sent successfully to ${conversationId}`);
+          }
+        } else {
+          if (__DEV__) console.error(`[SocketService] Failed to send message:`, response?.message || 'No error message');
+        }
+      });
+      
+      return true;
+    } catch (error) {
+      if (__DEV__) console.error('[SocketService] Error sending message:', error);
       return false;
     }
-    
-    if (!this.socket || !this.connected) {
-      if (__DEV__) console.log('[SocketService] Cannot send message: Socket not connected');
-      return false;
-    }
-
-    // Get user info from redux state
-    const currentUser = store.getState()?.auth?.user;
-    if (!currentUser || !currentUser._id) {
-      if (__DEV__) console.log('[SocketService] Cannot send message: User not authenticated');
-      return false;
-    }
-
-    // Send the message
-    this.socket.emit('send_message', {
-      conversationId,
-      content: message,
-      senderId: currentUser._id,
-      timestamp: new Date().toISOString(),
-      metadata
-    });
-
-    if (__DEV__) console.log(`[SocketService] Message sent to room: ${conversationId}`);
-    return true;
   };
 
   /**
